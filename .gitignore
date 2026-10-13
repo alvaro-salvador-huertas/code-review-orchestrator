@@ -1,0 +1,13 @@
+/runs/
+
+# Cachés de Python
+__pycache__/
+*.py[cod]
+
+# Configuración y entornos locales
+/.agents/
+/.codex/
+/.aws/
+/.env
+/.env.*
+/.venv/
