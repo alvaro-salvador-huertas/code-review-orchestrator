@@ -1,11 +1,8 @@
 """Revisa una reparación aceptada sin ejecutar el candidato ni al desarrollador."""
 
 import argparse
-import ast
-import difflib
 import json
 from pathlib import Path
-import re
 import sys
 import tempfile
 import time
@@ -14,8 +11,13 @@ from uuid import uuid4
 from repair_case import (
     AGENT_TIMEOUT_SECONDS, PREFLIGHT_TIMEOUT_SECONDS, digest, inventory,
     read_regular, run_process, timestamp, write_json,
+    ProcessRecordError,
 )
 from run_case import CASES, utc_timestamp
+from case_evidence import (
+    require, parse_json, snapshot_tree, reference_test_ids, validate_test_report,
+    classify_test_report, unified_diff,
+)
 
 
 CODEX_EXECUTABLE = "codex"
@@ -36,89 +38,10 @@ MATERIALS = {
 }
 
 
-def require(condition, message):
-    if not condition:
-        raise ValueError(message)
-
-
-def parse_json(content):
-    """Rechazar JSON ambiguo: claves duplicadas, NaN e infinitos."""
-    def unique_object(pairs):
-        result = {}
-        for key, value in pairs:
-            require(key not in result, f"Clave JSON duplicada: {key}")
-            result[key] = value
-        return result
-
-    def invalid_constant(value):
-        raise ValueError(f"Constante JSON no admitida: {value}")
-
-    return json.loads(content.decode("utf-8"), object_pairs_hook=unique_object,
-                      parse_constant=invalid_constant)
-
-
-def snapshot_tree(directory):
-    """Inventariar archivos sin aceptar enlaces ni archivos especiales."""
-    require(directory.is_dir() and not directory.is_symlink(), f"Directorio inválido: {directory}")
-    result = {}
-    for path in sorted(directory.rglob("*")):
-        require(not path.is_symlink(), f"Enlace no permitido: {path}")
-        if path.is_dir():
-            continue
-        content = read_regular(path)
-        require(content is not None, f"No es un archivo regular: {path}")
-        result[path.relative_to(directory).as_posix()] = digest(content)
-    return result
-
-
-def reference_test_ids(reference):
-    """Leer las pruebas explícitas de unittest mediante AST, sin importarlas."""
-    try:
-        tree = ast.parse(reference, filename="test_solution.py")
-    except SyntaxError as exc:
-        raise ValueError(f"Pruebas de referencia con sintaxis inválida: {exc}") from exc
-    identifiers = []
-    for node in tree.body:
-        require(not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                     and node.name == "load_tests"),
-                "No se admite descubrimiento dinámico mediante load_tests")
-        if not isinstance(node, ast.ClassDef):
-            continue
-        methods = [method.name for method in node.body
-                   if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                   and method.name.startswith("test")]
-        if not methods:
-            continue
-        require(any(isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name)
-                    and base.value.id == "unittest" and base.attr == "TestCase"
-                    or isinstance(base, ast.Name) and base.id == "TestCase"
-                    for base in node.bases),
-                f"Clase de pruebas no admitida para lectura estática: {node.name}")
-        identifiers.extend(f"test_solution.{node.name}.{method}" for method in methods)
-    require(identifiers and len(set(identifiers)) == len(identifiers),
-            "Las referencias deben declarar pruebas explícitas sin identificadores duplicados")
-    return sorted(identifiers)
-
-
-def validate_test_report(reference, report):
-    expected = reference_test_ids(reference)
-    summaries = list(re.finditer(r"(?m)^Ran (\d+) tests? in [0-9.]+s$", report))
-    require(len(summaries) == 1 and int(summaries[0].group(1)) == len(expected)
-            and re.fullmatch(r"\n\nOK\s*", report[summaries[0].end():]) is not None,
-            "El total o el cierre del informe no acredita las pruebas de referencia completas")
-    rows = [line for line in report.splitlines() if line.startswith("test")]
-    actual = []
-    for row in rows:
-        match = re.fullmatch(r"(test\w*) \((test_solution\.\w+\.(test\w*))\) \.\.\. ok", row)
-        require(match is not None and match.group(1) == match.group(3),
-                "Prueba omitida, fallida o fila de informe inválida")
-        actual.append(match.group(2))
-    require(sorted(actual) == expected,
-            "El número y los nombres del informe no coinciden con las pruebas conservadas")
-
-
-def validate_repair(run_dir, project_root):
+def validate_repair(run_dir, project_root, *, allow_test_failure=False, _seen=()):
     """Contrastar evidencia conservada; nunca importar ni ejecutar sus archivos."""
+    run_dir = Path(run_dir).absolute()
+    require(run_dir not in _seen and len(_seen) < 2, "Continuidad cíclica o más de dos intentos")
     snapshot = snapshot_tree(run_dir)
 
     def read(name):
@@ -131,9 +54,13 @@ def validate_repair(run_dir, project_root):
     try:
         result = parse_json(read("resultado.json"))
         require(result["caso"] == "case_02", "El registro no corresponde a case_02")
-        require(result["aceptada"] is True
-                and result["estado"] == "supera_las_pruebas_disponibles"
-                and type(result["codigo_salida"]) is int and result["codigo_salida"] == 0
+        accepted = (result["aceptada"] is True
+                    and result["estado"] == "supera_las_pruebas_disponibles"
+                    and type(result["codigo_salida"]) is int and result["codigo_salida"] == 0)
+        failed = (allow_test_failure and result["aceptada"] is False
+                  and result["estado"] == "no_supera_pruebas"
+                  and type(result["codigo_salida"]) is int and result["codigo_salida"] == 1)
+        require((accepted or failed)
                 and result["candidato_disponible"] is True
                 and result["errores_controlador"] == [], "La reparación no está aceptada")
         require(all(result["integridad"][key] is True for key in INTEGRITY_KEYS),
@@ -162,8 +89,32 @@ def validate_repair(run_dir, project_root):
                 and type(agent["codigo_salida"]) is int and agent["codigo_salida"] == 0
                 and type(agent["invocaciones"]) is int and agent["invocaciones"] == 1,
                 "Resultado del desarrollador inconsistente")
+        original = read("referencia/solution.py")
+        starting = original
+        new_format = result.get("version_registro") == 2
+        require(result.get("version_registro", 1) in (1, 2), "Versión de registro desconocida")
+        if new_format:
+            starting = read("partida.py")
+            require(digest(starting) == hashes["partida"], "Hash de partida inconsistente")
+            require(digest(read("feedback.json")) == hashes["feedback"], "Feedback alterado")
+            feedback = parse_json(read("feedback.json"))
+            provenance = result["procedencia"]
+            if provenance == {"tipo": "benchmark"}:
+                require(starting == original and feedback is None, "Partida original inconsistente")
+            else:
+                expected_start, expected_feedback, expected_origin = correction_context(
+                    Path(provenance["reparacion_previa"]),
+                    Path(provenance["revision_previa"]) if provenance.get("revision_previa") else None,
+                    project_root, _seen=_seen + (run_dir,),
+                )
+                require(starting == expected_start and feedback == expected_feedback
+                        and provenance == expected_origin, "Continuidad o feedback inconsistente")
+            require(read("partida.diff") == unified_diff(
+                original, starting, "referencia/solution.py", "partida.py"), "Diff de partida inconsistente")
+            require(read("correccion.diff") == unified_diff(
+                starting, candidate, "partida.py", "candidato/solution.py"), "Diff de corrección inconsistente")
         for phase, key, implementation in (
-            ("inicial", "pruebas_iniciales", read("referencia/solution.py")),
+            ("inicial", "pruebas_iniciales", starting),
             ("posterior", "pruebas_posteriores", candidate),
         ):
             phase_result = parse_json(read(phase + "/resultado.json"))
@@ -189,21 +140,90 @@ def validate_repair(run_dir, project_root):
             read(phase + "/stderr.txt")
         after = result["pruebas_posteriores"]
         require(after["estado"] == "finalizada" and type(after["codigo_salida"]) is int
-                and after["codigo_salida"] == 0,
-                "La evaluación posterior no terminó con código cero")
+                and after["codigo_salida"] == (0 if accepted else 1),
+                "La evaluación posterior no coincide con el resultado")
         report = read("posterior/stderr.txt").decode("utf-8")
-        validate_test_report(tests, report)
-        expected_diff = b"".join(difflib.diff_bytes(
-            difflib.unified_diff, read("referencia/solution.py").splitlines(keepends=True),
-            candidate.splitlines(keepends=True), fromfile=b"inicial/solution.py",
-            tofile=b"candidato/solution.py",
-        ))
+        classification = classify_test_report(tests, report, after["codigo_salida"])
+        require(classification == ("superadas" if accepted else "fallos_asercion"),
+                "El resultado de las pruebas no permite esta transición")
+        expected_diff = unified_diff(original, candidate,
+                                     "referencia/solution.py" if new_format else "inicial/solution.py",
+                                     "candidato/solution.py")
         require(read("candidato.diff") == expected_diff, "El diff no corresponde al candidato")
         materials = {name: read(source) for name, source in MATERIALS.items()}
         require(snapshot_tree(run_dir) == snapshot, "El registro cambió durante la validación")
         return materials, snapshot
     except (KeyError, TypeError, AttributeError) as exc:
         raise ValueError(f"Estructura de evidencia incompleta o inválida: {exc}") from exc
+
+
+def validate_review_record(run_dir, source_run, project_root):
+    """Comprobar un dictamen ya registrado, sin volver a invocar al revisor."""
+    try:
+        snapshot = snapshot_tree(run_dir)
+        result = parse_json((run_dir / "resultado.json").read_bytes())
+        origin = parse_json((run_dir / "origen.json").read_bytes())
+        require(result["reparacion_origen"] == origin["registro_reparacion"] == str(source_run),
+                "Origen de revisión inconsistente")
+        require(origin["registro_sha256"] == snapshot_tree(source_run), "Reparación de origen alterada")
+        require(result["caso"] == "case_02" and result["evidencia_previa_valida"] is True
+                and result["error_respuesta"] is None and result["errores_controlador"] == [],
+                "Evidencia de revisión inválida")
+        keys = {"workspace_intacto", "registro_reparacion_intacto", "materiales_conservados_intactos",
+                "originales_intactos", "instrucciones_intactas", "entrada_intacta"}
+        require(keys <= result["integridad"].keys()
+                and all(value is True for value in result["integridad"].values()),
+                "Integridad de revisión inválida")
+        hashes = snapshot_tree(run_dir / "materiales")
+        require(hashes == origin["materiales_sha256"] == result["materiales_sha256"]
+                == result["materiales_sha256_despues"], "Materiales de revisión alterados")
+        for name, source in MATERIALS.items():
+            require(read_regular(run_dir / "materiales" / name) == read_regular(source_run / source),
+                    f"Material de revisión distinto: {name}")
+        prompt = read_regular(project_root / "prompts/reviewer.md")
+        require(digest(prompt) == origin["instrucciones_sha256"]
+                and prompt == read_regular(run_dir / "revisor/entrada.txt"), "Instrucciones alteradas")
+        agent = result["revisor"]
+        require(agent == parse_json((run_dir / "revisor/resultado.json").read_bytes())
+                and agent["estado"] == "finalizada" and type(agent["codigo_salida"]) is int
+                and agent["codigo_salida"] == 0 and type(agent["invocaciones"]) is int
+                and agent["invocaciones"] == 1, "Proceso de revisión inconsistente")
+        verdict = validate_verdict((run_dir / "revisor/respuesta_original.txt").read_bytes(),
+                                  len((source_run / "candidato.py").read_bytes().splitlines()))
+        require(verdict == result["dictamen_modelo"]
+                == parse_json((run_dir / "dictamen_validado.json").read_bytes()), "Dictamen alterado")
+        code, decision = decide(result)
+        require(type(result["codigo_salida"]) is int and result["codigo_salida"] == code
+                and result["decision_controlador"] == decision and result["aprobada"] is (code == 0),
+                "Decisión de revisión inconsistente")
+        require(snapshot_tree(run_dir) == snapshot, "La revisión cambió durante la lectura")
+        return result, snapshot
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError(f"Revisión incompleta: {exc}") from exc
+
+
+def correction_context(previous_run, previous_review, project_root, *, _seen=()):
+    """Solo evidencia validada puede motivar la única corrección permitida."""
+    materials, hashes = validate_repair(previous_run, project_root, allow_test_failure=True, _seen=_seen)
+    previous = parse_json((previous_run / "resultado.json").read_bytes())
+    review_hashes = None
+    if previous_review is None:
+        require(previous["estado"] == "no_supera_pruebas", "Faltan fallos que justifiquen corregir")
+        feedback = {"tipo": "fallos_pruebas", "resultado": previous["pruebas_posteriores"],
+                    "stdout": materials["posterior.stdout.txt"].decode("utf-8"),
+                    "stderr": materials["posterior.stderr.txt"].decode("utf-8")}
+    else:
+        require(previous["aceptada"] is True, "La reparación revisada no estaba aceptada")
+        review, review_hashes = validate_review_record(previous_review, previous_run, project_root)
+        require(review["decision_controlador"] == "cambios_solicitados", "La revisión no solicita cambios")
+        feedback = {"tipo": "solicitar_cambios", "dictamen": review["dictamen_modelo"]}
+    provenance = {
+        "tipo": "candidato_previo", "reparacion_previa": str(previous_run),
+        "reparacion_previa_sha256": hashes,
+        "revision_previa": str(previous_review) if previous_review else None,
+        "revision_previa_sha256": review_hashes,
+    }
+    return materials["candidato.py"], feedback, provenance
 
 
 def response_schema(line_count):
@@ -280,8 +300,12 @@ def invoke_reviewer(workspace, final_path, prompt, log_dir):
         "--output-schema", str(workspace / "respuesta.schema.json"),
         "--output-last-message", str(final_path), "-",
     ]
-    execution = run_process(command, workspace, log_dir, AGENT_TIMEOUT_SECONDS, prompt=prompt,
-                            stdout_name="eventos.jsonl", stderr_name="stderr.txt")
+    try:
+        execution = run_process(command, workspace, log_dir, AGENT_TIMEOUT_SECONDS, prompt=prompt,
+                                stdout_name="eventos.jsonl", stderr_name="stderr.txt")
+    except ProcessRecordError as exc:
+        execution = exc.result
+        execution["error_registro"] = str(exc)
     result.update(execution, invocaciones=1)
     return result
 
@@ -305,7 +329,7 @@ def decide(result):
     return 0, "aprobada"
 
 
-def review_case(source_run, project_root):
+def run_review(source_run, project_root):
     started = time.monotonic()
     started_at = utc_timestamp()
     project_root = Path(project_root).resolve()
@@ -318,13 +342,14 @@ def review_case(source_run, project_root):
                 and source_run.resolve() not in runs_dir.resolve().parents,
                 "El registro de revisión no puede crearse dentro del registro original")
     except (OSError, ValueError) as exc:
-        print(f"Evidencia inválida: {exc}", file=sys.stderr)
-        print("Decisión del controlador: evidencia_invalida; revisor no invocado")
-        return 7
+        return {"registro": None, "codigo_salida": 7, "decision_controlador": "evidencia_invalida",
+                "aprobada": False, "evidencia_previa_valida": False, "dictamen_modelo": None,
+                "error_evidencia": str(exc), "errores_controlador": [],
+                "revisor": {"estado": "no_ejecutado", "codigo_salida": None, "invocaciones": 0}}
 
     run_dir = None
     result = {
-        "caso": "case_02", "inicio_utc": started_at.isoformat().replace("+00:00", "Z"),
+        "caso": "case_02", "inicio_utc": started_at.isoformat().replace("+00:00", "Z"), "registro": None,
         "reparacion_origen": str(source_run),
         "evidencia_previa_valida": True, "dictamen_modelo": None,
         "error_respuesta": None, "integridad": {}, "errores_controlador": [],
@@ -334,6 +359,7 @@ def review_case(source_run, project_root):
         runs_dir.mkdir(exist_ok=True)
         run_dir = runs_dir / f"{started_at.strftime('%Y%m%dT%H%M%S%fZ')}_case_02_review_{uuid4().hex}"
         run_dir.mkdir()
+        result["registro"] = str(run_dir)
         agent_log = run_dir / "revisor"
         agent_log.mkdir()
         for name in ("eventos.jsonl", "stderr.txt", "respuesta_original.txt", "codex_version.txt"):
@@ -368,6 +394,8 @@ def review_case(source_run, project_root):
                 (workspace / name).write_bytes(content)
             final_path = Path(temporary) / "respuesta.txt"
             result["revisor"] = invoke_reviewer(workspace, final_path, prompt, agent_log)
+            if result["revisor"].get("error_registro"):
+                result["errores_controlador"].append(result["revisor"]["error_registro"])
             raw = read_regular(final_path)
             result["revisor"]["respuesta_disponible"] = raw is not None
             if raw is not None:
@@ -415,12 +443,21 @@ def review_case(source_run, project_root):
             code = 8
             result.update(decision_controlador="fallo_controlador", codigo_salida=code, aprobada=False)
             result["errores_controlador"].append(f"No se pudo guardar resultado.json: {exc}")
+    return result
+
+
+def review_case(source_run, project_root):
+    result = run_review(source_run, project_root)
+    if not result["evidencia_previa_valida"]:
+        print(f"Evidencia inválida: {result['error_evidencia']}", file=sys.stderr)
+        print("Decisión del controlador: evidencia_invalida; revisor no invocado")
+        return 7
     print(f"Decisión del controlador: {result['decision_controlador']}")
     print(f"Dictamen del modelo: {result['dictamen_modelo']['decision'] if result['dictamen_modelo'] else 'no válido/disponible'}")
-    print(f"Registro: {run_dir if run_dir else 'no creado'}")
+    print(f"Registro: {result['registro'] or 'no creado'}")
     for error in result["errores_controlador"]:
         print(f"Error del controlador: {error}", file=sys.stderr)
-    return code
+    return result["codigo_salida"]
 
 
 def main(argv=None):

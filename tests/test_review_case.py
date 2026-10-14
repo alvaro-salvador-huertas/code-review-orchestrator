@@ -500,7 +500,7 @@ class TestReviewCase(unittest.TestCase):
         self.assertTrue((directory / "revisor/respuesta_original.txt").read_bytes())
 
     def test_cli_con_ruta_relativa_desde_otro_directorio(self):
-        for name in ("review_case.py", "repair_case.py", "run_case.py"):
+        for name in ("review_case.py", "repair_case.py", "run_case.py", "case_evidence.py"):
             shutil.copy2(PROJECT_ROOT / name, self.project / name)
         tools_dir = self.temporary / "bin"
         tools_dir.mkdir()

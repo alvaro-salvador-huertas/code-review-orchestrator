@@ -1,10 +1,18 @@
 # Resultados del caso 02 — 14 de octubre de 2026
 
-La nueva reparación con contrato de versión 2 pasó de **9 pruebas correctas y
-7 fallidas a 16 correctas**. Una revisión independiente emitió **`aprobar`, sin
+La primera ejecución real coordinada terminó **aprobada en un intento y dos
+invocaciones de Codex**, con contrato de versión 2. Las 16 pruebas del caso
+pasaron de **9 correctas y 7 fallidas a 16 correctas**. El revisor emitió
+`aprobar`, sin hallazgos; los controladores de reparación, revisión y
+orquestación terminaron con código 0 e integridad positiva. No hubo una
+corrección automática: el segundo intento todavía no se ha observado con el
+modelo real. Las **78 pruebas automatizadas previas** usaron Codex simulado.
+
+Antes, la reparación manual con contrato de versión 2 pasó de **9 pruebas
+correctas y 7 fallidas a 16 correctas**. Una revisión independiente emitió **`aprobar`, sin
 hallazgos**; el controlador registró **`aprobada`, código 0**. Las dos etapas
-se lanzaron manualmente con comandos separados. La evidencia permite cerrar
-este hito de desarrollo y revisión para el caso 02, sin demostrar fiabilidad
+se lanzaron manualmente con comandos separados. Esa evidencia cerró el hito
+anterior de desarrollo y revisión para el caso 02, sin demostrar fiabilidad
 general ni constituir un ciclo automático de corrección.
 
 Se conserva toda la secuencia anterior. El segundo intento real produjo el
@@ -17,11 +25,12 @@ sistema de archivos de solo lectura y dejó la implementación sin cambios.
 Una revisión posterior de esa reparación solicitó cambios por la interpretación
 de los espacios en blanco. El usuario aclaró el contrato como versión 2, y una
 reevaluación local del mismo candidato superó las 16 pruebas nuevas y existentes.
-Son evidencias distintas de la nueva reparación y revisión de versión 2.
+Son evidencias distintas de las reparaciones y revisiones posteriores de versión 2.
 El dictamen de versión 1 sigue siendo `solicitar_cambios`.
 
-Este informe corresponde a la rama `feat/agente-desarrollador`. Su versión
-inicial era documental; una ampliación previa incluyó la suite de 57 pruebas
+Este informe se inició en la rama `feat/agente-desarrollador` y se amplía en
+`feat/orquestacion-acotada`. Su versión inicial era documental; una ampliación
+previa incluyó la suite de 57 pruebas
 del controlador y una reevaluación local. Este cierre solo lee y contrasta los
 registros posteriores: no repite pruebas ni hace llamadas al modelo. Ningún
 candidato se aplicó a `benchmark/case_02/solution.py`, que conserva su defecto.
@@ -42,6 +51,9 @@ los diffs guardados corresponden a esas copias.
 | Reevaluación local v2 | `20261014T104559983435Z_case_02_reevaluacion_local_v2_318ba7c432cd4c3f807be871ca4ef3c4` | 2026-10-14 10:45:59.983435Z | 14/10/2026 12:45:59 |
 | 3 — reparación v2 | `20261014T105547244465Z_case_02_repair_1bd0e59ca7654489ba7f455fa6e03929` | 2026-10-14 10:55:47.244465Z | 14/10/2026 12:55:47 |
 | Revisión v2 | `20261014T105754354270Z_case_02_review_2b4d717cb28e4b91adcf5b4ae462651e` | 2026-10-14 10:57:54.354270Z | 14/10/2026 12:57:54 |
+| Orquestación v2 | `20261014T140332296667Z_case_02_orchestrate_599245bb19684d73aabd766745c56579` | 2026-10-14 14:03:32.296667Z | 14/10/2026 16:03:32 |
+| Reparación coordinada, intento 1 | `20261014T140332299453Z_case_02_repair_b677ef2959f54e07800d505d08e14229` | 2026-10-14 14:03:32.299453Z | 14/10/2026 16:03:32 |
+| Revisión coordinada, intento 1 | `20261014T140403668438Z_case_02_review_0fc8d2b0921e480181729f2e92845d76` | 2026-10-14 14:04:03.668438Z | 14/10/2026 16:04:03 |
 
 El usuario indica que el segundo intento fue lanzado manualmente desde la
 terminal. Los registros confirman una ejecución separada, con su propio
@@ -513,32 +525,183 @@ y su defecto. Ningún registro histórico se modifica: permanecen tanto el fallo
 de inicialización como la solicitud de cambios bajo versión 1. La decisión
 humana que aclaró el contrato no convierte aquel rechazo en aprobación.
 
+## Primera ejecución real coordinada
+
+El registro general `20261014T140332296667Z_case_02_orchestrate_599245bb19684d73aabd766745c56579`
+acredita el primer recorrido real de desarrollo, pruebas independientes y
+revisión con [orchestrate_case.py](../orchestrate_case.py). Su presupuesto es
+`max_intentos: 2` y `max_invocaciones: 4`, correspondiente al comando:
+
+```sh
+python3 orchestrate_case.py case_02 --max-attempts 2
+```
+
+El resumen no conserva los argumentos de lanzamiento del proceso padre; el
+valor 2 también es el predeterminado. Sí conserva un único intento, las rutas y
+los resultados de ambas etapas, y el consumo de **una invocación del desarrollador
+y una del revisor, dos en total**. Sus resultados incrustados coinciden con
+los `resultado.json` de reparación y revisión, y sus inventarios SHA-256
+coinciden con todos los archivos de esos registros.
+
+| Dato | Reparación coordinada | Revisión coordinada | Registro general |
+| --- | --- | --- | --- |
+| Estado del controlador | `supera_las_pruebas_disponibles` | `aprobada` | `aprobada` |
+| Aceptación o aprobación | `aceptada: true` | `aprobada: true` | `aprobada: true` |
+| Código del controlador | 0 | 0 | 0 |
+| Codex | `finalizada`, código 0 | `finalizada`, código 0 | Dos invocaciones contabilizadas |
+| Duración del proceso Codex | 31,023 s | 25,811 s | — |
+| Duración de la etapa | 31,348 s | 25,962 s | 57,361 s |
+| Integridad registrada | 9/9 positivas | 6/6 positivas | 4/4 positivas |
+| Errores del controlador | Lista vacía | Lista vacía | Lista vacía |
+
+La ejecución general va de `2026-10-14T14:03:32.296667Z` a
+`2026-10-14T14:04:29.657270Z`. Las transiciones conservadas son desarrollo →
+`revisar`, motivo `supera_las_pruebas_disponibles`, y revisión → `aprobar`,
+motivo `revision_aprobada`. No hay transición `corregir`, segundo intento ni
+agotamiento del presupuesto. En el código, `next_stage()` decide la siguiente
+etapa y `run_orchestration()` limita el bucle y contabiliza las invocaciones.
+
+### Pruebas independientes y candidato
+
+| Evaluación del controlador | Ejecutadas | Correctas | Fallidas | Código | Duración del proceso |
+| --- | --- | --- | --- | --- | --- |
+| Inicial, original defectuoso | 16 | 9 | 7 | 1 | 0,065 s |
+| Posterior, candidato | 16 | 16 | 0 | 0 | 0,065 s |
+
+Se contrastaron los 16 identificadores de cada informe con las pruebas
+conservadas, sin omisiones ni duplicados. El inicial contiene siete diagnósticos
+`AssertionError` y termina con `FAILED (failures=7)`; el posterior termina con
+`OK`. Los códigos y resultados individuales coinciden con el resumen de
+reparación. Ambos stdout están vacíos. Fallaban los mismos siete casos de
+respuesta vacía descritos en la reparación manual v2; las prioridades ya pasaban.
+Los comandos guardados usan procesos nuevos y copias distintas para ambas
+evaluaciones, con límite de 30 segundos.
+
+La procedencia es `{"tipo": "benchmark"}`: `partida.py` coincide exactamente con
+el original defectuoso; `partida.diff` está vacío y `feedback.json` contiene
+`null`. El diff acumulado del candidato es:
+
+```diff
+--- referencia/solution.py
++++ candidato/solution.py
+@@ -3,4 +3,6 @@
+         return "tiempo_agotado"
+     if codigo_salida is None or codigo_salida != 0:
+         return "fallo_ejecucion"
++    if respuesta is None or respuesta == "" or respuesta.isspace():
++        return "respuesta_vacia"
+     return "completada"
+```
+
+La condición se aplica después de timeout y fallo de ejecución. El cortocircuito
+evita llamar a `isspace()` sobre `None`; la cadena vacía se trata aparte porque
+ese método devuelve `False` para ella. Los bytes del candidato coinciden con
+los de la reparación manual v2, pero este registro acredita una nueva ejecución
+y una evaluación propia. El candidato **supera las pruebas disponibles**.
+
+Los eventos del desarrollador contienen lecturas, una modificación de
+`solution.py` y dos comandos de pruebas: `python` falla al arrancar con código
+127; `python3 -B -m unittest -v test_solution.py` termina con 16 correctas y
+código 0. Son acciones internas de una única invocación; no constituyen una
+segunda reparación ni sustituyen la evaluación posterior del controlador.
+
+### Dictamen y acciones del revisor
+
+La respuesta original coincide con `dictamen_validado.json`, el mensaje final
+de los eventos y `dictamen_modelo`:
+
+```json
+{
+  "decision": "aprobar",
+  "resumen": "No se identifican incumplimientos concretos en la revisión estática. El código respeta las prioridades, distingue None y la cadena vacía, aplica str.isspace() y no presenta efectos secundarios, también al considerar combinaciones admitidas no cubiertas por las pruebas.",
+  "hallazgos": []
+}
+```
+
+El controlador registra `evidencia_previa_valida: true`, `error_respuesta: null`
+y decisión `aprobada`. La aprobación también depende de los procesos, la
+evidencia y la integridad; no se deduce solo del código cero ni de las afirmaciones
+del modelo. El resumen sobre entradas no probadas es el dictamen del revisor,
+no una demostración exhaustiva de corrección.
+
+Los eventos contienen seis comandos del revisor, todos con código 0:
+`pwd`, enumeración de los nueve materiales con `rg --files`,
+`nl -ba candidato.py`, `cat contrato.md`, `cat candidato.diff original.py` y
+`cat test_solution.py posterior.json posterior.stdout.txt posterior.stderr.txt respuesta.schema.json`.
+Las salidas de `cat` y `nl` coinciden con las copias archivadas.
+**Las acciones registradas se limitaron a consultar y leer los materiales**:
+no hay edición, importación ni ejecución del candidato o las pruebas. Leer
+el informe posterior no vuelve a ejecutar sus pruebas.
+
+Los dos agentes usaron Codex CLI 0.162.1, sesiones con identificadores distintos,
+límite de 180 segundos y stderr vacío. Los comandos conservan `workspace-write`
+para desarrollar, `read-only` para revisar, aprobaciones `never`, búsqueda web
+y delegación desactivadas, eventos JSONL y respuesta final separada. Las consultas
+de versión y ayuda terminaron con código 0.
+
+### Integridad contrastada
+
+Se recalcularon los hashes de las referencias fijas y de los seis originales
+de `benchmark/` y `tasks/`. Coinciden con ambos resúmenes. Se reconstruyeron
+los tres diffs; el candidato coincide con la implementación evaluada y el
+material revisado. Las pruebas de las dos evaluaciones y las devueltas por el
+desarrollador coinciden con las referencias. También coinciden el inventario
+completo de reparación en `origen.json`, los inventarios de ambos registros
+en el resumen general y los nueve materiales de revisión con sus hashes de
+antes y después. La entrada del revisor coincide con
+[prompts/reviewer.md](../prompts/reviewer.md); no incluye la explicación final
+del desarrollador.
+
+| Material | SHA-256 verificado |
+| --- | --- |
+| Original y partida | `4c373f13f90ef6c25d10aa71bbbfcd2235ea72f7839b9d5041a408cd94618cea` |
+| Candidato resultante, evaluado y revisado | `7d3d635fbc248020f69cb15b1cc9050f1be4ca2ede558969068ba313d94fd03d` |
+| Contrato v2 | `ecc5b162cdf2b78a85709f94f1386393e87ee83e2271085a9a933c2119262455` |
+| Pruebas v2 | `c5fd3075772133bdd01972a634a22e1663bad2bf8fa6695a97ef43a6bd3761b3` |
+| Diff acumulado | `0e5fba34833607d0f62cbdd70e014d4ea2b30b6cc4925bc85e9d57215af667a6` |
+
+El diff tiene una cabecera distinta del histórico manual (`referencia/solution.py`
+en vez de `inicial/solution.py`); por eso sus hashes difieren aunque los candidatos
+sean idénticos. Las nueve comprobaciones de reparación incluyen ahora partida
+y feedback intactos, además de las siete anteriores. Las seis de revisión
+siguen siendo positivas. Las cuatro generales comprueban originales, referencia
+fija, instrucciones del revisor y registros relacionados.
+Las carpetas temporales ya no están disponibles: su estado final se acredita
+por los inventarios registrados; las copias archivadas se contrastaron
+directamente. No se alteraron originales ni registros históricos.
+
 ## Separación de evidencias al cierre
 
 | Evidencia | Resultado y alcance |
 | --- | --- |
-| Suite automatizada del controlador | 57 pruebas correctas: 14 de ejecución, 16 de reparación y 27 de revisión; Codex simulado. Validación previa, no repetida en este cierre. |
+| Suite previa de desarrollo y revisión | 57 pruebas correctas: 14 de ejecución, 16 de reparación y 27 de revisión; Codex simulado. Se conserva esa validación histórica. |
+| Suite ampliada de orquestación | 78 pruebas correctas en 22,166 s, código 0: las 57 anteriores y 21 de orquestación, con Codex simulado. Validación previa a la ejecución coordinada real; no repetida en este cierre. |
 | Reevaluación local anterior | Candidato histórico con `strip()` frente a las 16 pruebas de versión 2: 16 correctas, código 0, cero invocaciones de Codex. No pertenece a la nueva reparación ni a un dictamen. |
-| Nueva reparación real v2 | Una invocación de Codex. El controlador ejecuta las 16 pruebas antes (9/7) y después (16/0) en procesos separados. |
-| Pruebas internas del desarrollador v2 | El intento con `python` falla al arrancar; con `python3` pasan 16. Son acciones de su sesión y no sustituyen la evaluación del controlador. |
-| Nueva revisión real v2 | Una invocación de Codex, seis comandos de lectura; dictamen `aprobar` y decisión `aprobada`. No ejecuta otra suite del caso según sus eventos. |
+| Reparación manual real v2, 12:55 | Una invocación de Codex. El controlador ejecuta las 16 pruebas antes (9/7) y después (16/0) en procesos separados. |
+| Pruebas internas del desarrollador manual v2 | El intento con `python` falla al arrancar; con `python3` pasan 16. Son acciones de su sesión y no sustituyen la evaluación del controlador. |
+| Revisión manual real v2, 12:57 | Una invocación de Codex, seis comandos de lectura; dictamen `aprobar` y decisión `aprobada`. No ejecuta otra suite del caso según sus eventos. |
+| Primera orquestación real v2, 16:03 | Un intento, dos invocaciones, aprobación. Evaluaciones independientes de 16 pruebas (9/7 → 16/0) y seis consultas/lecturas del revisor. Sin segundo intento. |
+| Pruebas internas del desarrollador coordinado | `python` termina con 127; `python3` pasa las 16 pruebas. Acciones internas de la única invocación del desarrollador, independientes de las evaluaciones del controlador. |
 | Este cierre documental | Lectura, comparación de archivos y hashes, revisión del diff y enlaces. Sin pruebas de código ni nuevas llamadas al modelo. |
 
-La secuencia completa conserva **cinco invocaciones de `codex exec`**: tres de
-reparación (incluido el fallo de inicialización) y dos de revisión. No se
-confunden con solicitudes internas al modelo, cuyo número no se deduce de ese
+La secuencia anterior conservaba cinco invocaciones de `codex exec`: tres de
+reparación (incluido el fallo de inicialización) y dos de revisión. La ejecución
+coordinada añade dos: **siete invocaciones en total, cuatro de reparación y
+tres de revisión**. No se confunden con solicitudes internas al modelo, cuyo número no se deduce de ese
 recuento, ni con las consultas locales de versión y ayuda. Los registros siguen
 intactos y excluidos de Git; este informe permite entenderlos sin acceso a ellos.
 
 ## Limitaciones
 
-Un caso sencillo, reparaciones que superan las pruebas disponibles, dos
+Un caso sencillo, reparaciones que superan las pruebas disponibles, tres
 revisiones y una reevaluación local **no demuestran
 fiabilidad general**, una tasa de éxito ni corrección para todas las entradas.
-La aprobación de versión 2 es el resultado de esta revisión concreta.
+Las aprobaciones de versión 2 son resultados de sus revisiones concretas.
 La aclaración del contrato tampoco demuestra por sí sola la fiabilidad del
-revisor. No se ha implementado un ciclo automático de corrección. El primer
-fallo se conserva y su causa concreta continúa sin confirmarse.
+revisor. La orquestación permite como máximo una corrección automática, validada
+con simulaciones; **el segundo intento todavía no se ha observado con el modelo
+real**. La ejecución real aprobada en un intento no valida esa transición.
+El primer fallo se conserva y su causa concreta continúa sin confirmarse.
 
 Una carpeta temporal no garantiza aislamiento de lecturas. Las pruebas
 ejecutadas por el controlador no heredan automáticamente el sandbox de Codex:
