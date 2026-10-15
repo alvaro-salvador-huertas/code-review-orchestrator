@@ -33,7 +33,8 @@ class TestRunCase(unittest.TestCase):
             )
             self.write_test(case_id=case_id)
         self.script = self.project / "run_case.py"
-        shutil.copy2(PROJECT_ROOT / "run_case.py", self.script)
+        for name in ("run_case.py", "case_config.py", "case_evidence.py"):
+            shutil.copy2(PROJECT_ROOT / name, self.project / name)
 
     def write_test(self, body="self.assertEqual(VALOR, 7)", case_id="case_01"):
         content = (

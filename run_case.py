@@ -10,11 +10,8 @@ import sys
 import time
 from uuid import uuid4
 
+from case_config import CASES, reference_paths
 
-CASES = {
-    "case_01": "001-sum-by-subject.md",
-    "case_02": "002-classify-run.md",
-}
 TIMEOUT_SECONDS = 30
 
 
@@ -45,9 +42,9 @@ def run_case(case_id, project_root):
 
     try:
         project_root = Path(project_root).resolve()
-        source_dir = project_root / "benchmark" / case_id
-        contract = project_root / "tasks" / CASES[case_id]
-        required = [source_dir / "solution.py", source_dir / "test_solution.py", contract]
+        sources = reference_paths(project_root, case_id)
+        contract = sources["contrato.md"]
+        required = list(sources.values())
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
             raise FileNotFoundError("Faltan archivos requeridos: " + ", ".join(missing))

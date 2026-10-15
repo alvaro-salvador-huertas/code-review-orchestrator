@@ -389,6 +389,18 @@ class TestReviewCase(unittest.TestCase):
         self.assert_rejected()
         self.assertEqual(review_case.snapshot_tree(self.source), self.original_source)
 
+    def test_formato_historico_case_02_con_y_sin_version_se_valida_sin_modificar(self):
+        for explicit_version in (False, True):
+            with self.subTest(explicit_version=explicit_version):
+                if explicit_version:
+                    self.summary["version_registro"] = 1
+                    self.save("resultado.json", self.summary)
+                before = review_case.snapshot_tree(self.source)
+                materials, hashes = review_case.validate_repair(self.source, self.project)
+                self.assertEqual(materials["candidato.py"], self.candidate)
+                self.assertEqual(hashes, before)
+                self.assertEqual(review_case.snapshot_tree(self.source), before)
+
     def test_lectura_estatica_identifica_clase_y_no_ejecuta_referencia(self):
         marker = self.temporary / "referencia_no_debe_ejecutarse"
         reference = (
@@ -500,7 +512,7 @@ class TestReviewCase(unittest.TestCase):
         self.assertTrue((directory / "revisor/respuesta_original.txt").read_bytes())
 
     def test_cli_con_ruta_relativa_desde_otro_directorio(self):
-        for name in ("review_case.py", "repair_case.py", "run_case.py"):
+        for name in ("review_case.py", "repair_case.py", "run_case.py", "case_evidence.py", "case_config.py"):
             shutil.copy2(PROJECT_ROOT / name, self.project / name)
         tools_dir = self.temporary / "bin"
         tools_dir.mkdir()
