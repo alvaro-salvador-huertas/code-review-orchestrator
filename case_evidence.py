@@ -98,8 +98,8 @@ def validate_test_report(reference, report):
             "El informe no acredita todas las pruebas superadas")
 
 
-def classify_test_report(reference, report, exit_code):
-    """Solo un informe completo de aserciones permite corregir un candidato."""
+def test_report_rows(reference, report):
+    """Contrastar identidad y total también en informes iniciales históricos."""
     expected = reference_test_ids(reference)
     summaries = list(re.finditer(r"(?m)^Ran (\d+) tests? in [0-9.]+s$", report))
     require(len(summaries) == 1 and int(summaries[0].group(1)) == len(expected),
@@ -117,7 +117,13 @@ def classify_test_report(reference, report, exit_code):
             errors.append(match.group(2))
     require(sorted(actual) == expected,
             "El número y los nombres del informe no coinciden con las pruebas conservadas")
-    ending = report[summaries[0].end():]
+    return summaries[0], failed, errors
+
+
+def classify_test_report(reference, report, exit_code):
+    """Solo un informe completo de aserciones permite corregir un candidato."""
+    summary, failed, errors = test_report_rows(reference, report)
+    ending = report[summary.end():]
     if errors:
         require(exit_code == 1 and "FAILED (" in ending, "Código o cierre inconsistente")
         return "error_pruebas"
@@ -134,7 +140,7 @@ def classify_test_report(reference, report, exit_code):
             and re.search(r"(?m)^ERROR:", report) is None, "Diagnósticos de fallos incoherentes")
     details = re.findall(
         r"(?ms)^FAIL: (test\w*) \((test_solution\.\w+\.(test\w*))\)\n"
-        r"-+\n(.*?)(?=^=+\n|^-+\nRan |\Z)", report[:summaries[0].start()])
+        r"-+\n(.*?)(?=^=+\n|^-+\nRan |\Z)", report[:summary.start()])
     require(sorted(item[1] for item in details) == sorted(failed),
             "Faltan diagnósticos de los fallos de aserción")
     for name, _, method, detail in details:

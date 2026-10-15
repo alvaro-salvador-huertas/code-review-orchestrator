@@ -28,7 +28,13 @@ CHANGES = {"decision": "solicitar_cambios", "resumen": "Observación simulada.",
      "ejemplo": "Ejemplo simulado para probar el envío de feedback."}]}
 
 
-class TestOrchestrateCase(unittest.TestCase):
+class OrchestrationFixture:
+    case_id = "case_02"
+    original = ORIGINAL
+    good = GOOD
+    partial = PARTIAL
+    function = "clasificar_ejecucion"
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="test-orchestration-")
         self.addCleanup(temporary.cleanup)
@@ -75,19 +81,19 @@ class TestOrchestrateCase(unittest.TestCase):
             "else:\n"
             "    final.write_text(action['response'])\n"
             "    if mode=='material_tamper': Path('candidato.py').write_text('# alterado')\n"
-            f"if mode=='original_tamper': Path({str(self.project / 'benchmark/case_02/solution.py')!r}).write_text('# alterado')\n"
+            f"if mode=='original_tamper': Path({str(self.project / 'benchmark' / self.case_id / 'solution.py')!r}).write_text('# alterado')\n"
             "if mode=='timeout': time.sleep(60)\n"
             "sys.exit(9 if mode=='nonzero' else 0)\n", encoding="utf-8")
         self.fake.chmod(0o700)
 
     def execute(self, developers=None, reviewers=None, attempts=2):
-        self.configure(developers if developers is not None else [{"candidate": GOOD}],
+        self.configure(developers if developers is not None else [{"candidate": self.good}],
                        reviewers if reviewers is not None else [{"response": json.dumps(APPROVAL)}])
         output = io.StringIO()
         with patch.object(repair_case, "CODEX_EXECUTABLE", str(self.fake)), \
                 patch.object(review_case, "CODEX_EXECUTABLE", str(self.fake)), \
                 redirect_stdout(output), redirect_stderr(output):
-            result = orchestrate_case.run_orchestration("case_02", self.project, attempts)
+            result = orchestrate_case.run_orchestration(self.case_id, self.project, attempts)
         self.assertEqual(output.getvalue(), "")
         self.assertEqual(snapshot_tree(self.historical), self.history)
         if result["registro"] and (Path(result["registro"]) / "resultado.json").exists():
@@ -102,6 +108,8 @@ class TestOrchestrateCase(unittest.TestCase):
     def assert_preserved(self):
         self.assertEqual(repair_case.inventory(self.project), self.originals)
 
+
+class TestOrchestrateCase(OrchestrationFixture, unittest.TestCase):
     def test_aprobacion_inicial_no_consume_segundo_intento(self):
         result = self.execute()
         self.assertEqual((result["codigo_salida"], result["estado"]), (0, "aprobada"))
@@ -109,7 +117,7 @@ class TestOrchestrateCase(unittest.TestCase):
         self.assertEqual(result["invocaciones"], {"desarrollador": 1, "revisor": 1, "total": 2})
         self.assertTrue(all(result["integridad"].values()))
         developer, reviewer = self.observed_calls()
-        self.assertEqual(developer["seen"]["solution.py"], ORIGINAL)
+        self.assertEqual(developer["seen"]["solution.py"], self.original)
         self.assertNotIn("EXPLICACION PRIVADA", str(reviewer))
         for call in (developer, reviewer):
             args = call["args"]
@@ -125,13 +133,13 @@ class TestOrchestrateCase(unittest.TestCase):
         self.assert_preserved()
 
     def test_fallos_de_asercion_y_correccion_con_partida_y_feedback_exactos(self):
-        result = self.execute([{"candidate": PARTIAL}, {"candidate": GOOD}])
+        result = self.execute([{"candidate": self.partial}, {"candidate": self.good}])
         self.assertEqual(result["codigo_salida"], 0)
         self.assertEqual(result["invocaciones"]["total"], 3)
         first, second = result["intentos"]
         self.assertIsNone(first["revision"])
         self.assertEqual(first["transiciones"][0]["motivo"], "fallos_asercion")
-        self.check_continuity(result, PARTIAL)
+        self.check_continuity(result, self.partial)
         first_run = Path(first["reparacion"]["registro"])
         feedback = json.loads((Path(second["reparacion"]["registro"]) / "feedback.json").read_text())
         self.assertEqual(feedback, {"tipo": "fallos_pruebas",
@@ -141,8 +149,8 @@ class TestOrchestrateCase(unittest.TestCase):
         self.assertIn(json.dumps(feedback, ensure_ascii=False, indent=2), self.observed_calls()[1]["prompt"])
 
     def test_solicitud_de_cambios_y_correccion_con_hallazgos_exactos(self):
-        first_candidate = GOOD + "# primera propuesta\n"
-        result = self.execute([{"candidate": first_candidate}, {"candidate": GOOD}],
+        first_candidate = self.good + "# primera propuesta\n"
+        result = self.execute([{"candidate": first_candidate}, {"candidate": self.good}],
                               [{"response": json.dumps(CHANGES)}, {"response": json.dumps(APPROVAL)}])
         self.assertEqual(result["codigo_salida"], 0)
         self.assertEqual(result["invocaciones"]["total"], 4)
@@ -159,7 +167,7 @@ class TestOrchestrateCase(unittest.TestCase):
         self.assertEqual((second / "inicial/workspace/solution.py").read_text(), candidate)
         developers = [call for call in self.observed_calls() if call["role"] == "developer"]
         self.assertEqual(developers[1]["seen"]["solution.py"], candidate)
-        self.assertEqual((second / "referencia/solution.py").read_text(), ORIGINAL)
+        self.assertEqual((second / "referencia/solution.py").read_text(), self.original)
         self.assertEqual((second / "referencia/contrato.md").read_bytes(), (first / "referencia/contrato.md").read_bytes())
         self.assertEqual((second / "referencia/test_solution.py").read_bytes(), (first / "referencia/test_solution.py").read_bytes())
         for path in (first, second):
@@ -172,7 +180,7 @@ class TestOrchestrateCase(unittest.TestCase):
     def test_agotamiento_por_pruebas_con_uno_o_dos_intentos(self):
         for limit in (1, 2):
             with self.subTest(limit=limit):
-                result = self.execute([{"candidate": PARTIAL}] * limit, [], limit)
+                result = self.execute([{"candidate": self.partial}] * limit, [], limit)
                 self.assertEqual((result["codigo_salida"], result["estado"]), (1, "intentos_agotados"))
                 self.assertFalse(result["aprobada"])
                 self.assertEqual(len(result["intentos"]), limit)
@@ -181,14 +189,14 @@ class TestOrchestrateCase(unittest.TestCase):
     def test_agotamiento_por_dictamenes_no_excede_cuatro_invocaciones(self):
         for limit in (1, 2):
             with self.subTest(limit=limit):
-                result = self.execute([{"candidate": GOOD}] * limit,
+                result = self.execute([{"candidate": self.good}] * limit,
                                       [{"response": json.dumps(CHANGES)}] * limit, limit)
                 self.assertEqual(result["codigo_salida"], 1)
                 self.assertEqual(result["invocaciones"]["total"], limit * 2)
                 self.assertEqual(len(self.observed_calls()), limit * 2)
 
     def test_error_tecnico_del_desarrollador_detiene_sin_evaluar_ni_revisar(self):
-        result = self.execute([{"candidate": GOOD, "mode": "nonzero"}], [])
+        result = self.execute([{"candidate": self.good, "mode": "nonzero"}], [])
         self.assertEqual(result["codigo_salida"], 3)
         repair = result["intentos"][0]["reparacion"]
         self.assertEqual(repair["pruebas_posteriores"]["estado"], "no_ejecutadas")
@@ -197,12 +205,12 @@ class TestOrchestrateCase(unittest.TestCase):
 
     def test_timeout_del_desarrollador_no_reintenta(self):
         with patch.object(repair_case, "AGENT_TIMEOUT_SECONDS", 0.3):
-            result = self.execute([{"candidate": GOOD, "mode": "timeout"}], [])
+            result = self.execute([{"candidate": self.good, "mode": "timeout"}], [])
         self.assertEqual(result["codigo_salida"], 4)
         self.assertEqual(len(self.observed_calls()), 1)
 
     def test_timeout_de_evaluacion_inicial_no_invoca_desarrollador(self):
-        (self.project / "benchmark/case_02/solution.py").write_text("import time\ntime.sleep(60)\n")
+        (self.project / "benchmark" / self.case_id / "solution.py").write_text("import time\ntime.sleep(60)\n")
         with patch.object(repair_case, "TIMEOUT_SECONDS", 0.3):
             result = self.execute([], [])
         self.assertEqual(result["codigo_salida"], 4)
@@ -224,7 +232,7 @@ class TestOrchestrateCase(unittest.TestCase):
                 self.assertFalse(result["aprobada"])
 
     def test_error_en_prueba_no_es_fallo_de_asercion(self):
-        candidate = "def clasificar_ejecucion(*args, **kwargs):\n    raise RuntimeError('error')\n"
+        candidate = f"def {self.function}(*args, **kwargs):\n    raise RuntimeError('error')\n"
         result = self.execute([{"candidate": candidate}], [])
         self.assertEqual((result["codigo_salida"], result["estado"]), (8, "error_pruebas"))
         self.assertEqual(len(self.observed_calls()), 1)
@@ -241,14 +249,14 @@ class TestOrchestrateCase(unittest.TestCase):
                 self.assertEqual(len(self.observed_calls()), 2)
 
     def test_alteracion_de_pruebas_del_agente_no_lanza_evaluacion(self):
-        result = self.execute([{"candidate": GOOD, "mode": "tests_tamper"}], [])
+        result = self.execute([{"candidate": self.good, "mode": "tests_tamper"}], [])
         self.assertEqual(result["codigo_salida"], 6)
         self.assertEqual(result["intentos"][0]["reparacion"]["pruebas_posteriores"]["estado"], "no_ejecutadas")
         self.assertEqual(len(self.observed_calls()), 1)
         self.assert_preserved()
 
     def test_alteracion_de_originales_no_continua(self):
-        result = self.execute([{"candidate": GOOD, "mode": "original_tamper"}], [])
+        result = self.execute([{"candidate": self.good, "mode": "original_tamper"}], [])
         self.assertEqual(result["codigo_salida"], 6)
         self.assertFalse(result["integridad"]["originales_intactos"])
         self.assertEqual(len(self.observed_calls()), 1)
@@ -267,7 +275,7 @@ class TestOrchestrateCase(unittest.TestCase):
         self.assertEqual(len(self.observed_calls()), 1)
 
     def test_continuidad_alterada_no_es_aceptable_para_revisar(self):
-        result = self.execute([{"candidate": PARTIAL}, {"candidate": GOOD}])
+        result = self.execute([{"candidate": self.partial}, {"candidate": self.good}])
         second = Path(result["intentos"][1]["reparacion"]["registro"])
         for name in ("partida.py", "partida.diff", "correccion.diff", "feedback.json"):
             with self.subTest(name=name):
@@ -328,21 +336,21 @@ class TestOrchestrateCase(unittest.TestCase):
         self.assertEqual(self.observed_calls(), [])
 
     def test_cli_presupuesto_predeterminado_y_argumentos_invalidos(self):
-        for name in ("orchestrate_case.py", "repair_case.py", "review_case.py", "run_case.py", "case_evidence.py"):
+        for name in ("orchestrate_case.py", "repair_case.py", "review_case.py", "run_case.py", "case_evidence.py", "case_config.py"):
             shutil.copy2(PROJECT / name, self.project / name)
-        self.configure([{"candidate": GOOD}], [{"response": json.dumps(APPROVAL)}])
+        self.configure([{"candidate": self.good}], [{"response": json.dumps(APPROVAL)}])
         bin_dir = self.temporary / "bin"
         bin_dir.mkdir()
         shutil.copy2(self.fake, bin_dir / "codex")
         env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
         command = [sys.executable, "-B", str(self.project / "orchestrate_case.py")]
-        completed = subprocess.run(command + ["case_02"], cwd=self.temporary, env=env,
+        completed = subprocess.run(command + [self.case_id], cwd=self.temporary, env=env,
                                    capture_output=True, timeout=10)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(b"Intentos: 1/2", completed.stdout)
         self.assertIn(b"Invocaciones: 2/4", completed.stdout)
         self.assertFalse((self.temporary / "runs").exists())
-        for args in ([], ["case_01"], ["case_02", "--max-attempts", "0"],
+        for args in ([], ["case_03"], ["case_02", "--max-attempts", "0"],
                      ["case_02", "--max-attempts", "3"], ["case_02", "--max-attempts", "x"]):
             rejected = subprocess.run(command + args, cwd=self.temporary, env=env,
                                       capture_output=True, timeout=10)
@@ -354,6 +362,14 @@ class TestOrchestrateCase(unittest.TestCase):
         report = "test_a (test_solution.T.test_a) ... FAIL\n\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n"
         with self.assertRaises(ValueError):
             classify_test_report(reference, report, 1)
+
+class TestOrchestrateCase01(TestOrchestrateCase):
+    case_id = "case_01"
+    original = (PROJECT / "benchmark/case_01/solution.py").read_text()
+    good = original.replace('= sesion["minutos"]',
+                            '= totales.get(sesion["asignatura"], 0) + sesion["minutos"]')
+    partial = original + "# candidato del primer intento\n"
+    function = "calcular_totales_por_asignatura"
 
 
 if __name__ == "__main__":

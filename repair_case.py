@@ -11,9 +11,10 @@ import tempfile
 import time
 from uuid import uuid4
 
-from run_case import CASES, TIMEOUT_SECONDS, utc_timestamp
+from run_case import TIMEOUT_SECONDS, utc_timestamp
+from case_config import CASES, get_case, load_reference
 from case_evidence import (
-    read_regular, digest, snapshot_matches, classify_test_report, unified_diff,
+    read_regular, digest, require, snapshot_matches, classify_test_report, unified_diff,
 )
 
 
@@ -205,21 +206,6 @@ def select_outcome(result):
     return 0, "supera_las_pruebas_disponibles"
 
 
-def load_reference(project_root, case_id="case_02"):
-    sources = {
-        "solution.py": project_root / "benchmark" / case_id / "solution.py",
-        "test_solution.py": project_root / "benchmark" / case_id / "test_solution.py",
-        "contrato.md": project_root / "tasks" / CASES[case_id],
-    }
-    reference = {}
-    for name, source in sources.items():
-        content = read_regular(source)
-        if content is None:
-            raise OSError(f"Falta un archivo regular requerido: {source}")
-        reference[name] = content
-    return reference
-
-
 class StopRepair(Exception):
     """Detención del flujo estricto; el diagnóstico se conserva en el resultado."""
 
@@ -286,8 +272,7 @@ def run_repair(case_id, project_root, *, reference=None, originals=None,
         check_fixed()
 
     try:
-        if case_id != "case_02":
-            raise ValueError("Este hito solo admite case_02")
+        get_case(case_id)
         runs_dir = project_root / "runs"
         runs_dir.mkdir(exist_ok=True)
         run_dir = runs_dir / f"{started_at.strftime('%Y%m%dT%H%M%S%fZ')}_{case_id}_repair_{uuid4().hex}"
@@ -312,6 +297,20 @@ def run_repair(case_id, project_root, *, reference=None, originals=None,
         if starting_candidate is None:
             starting_candidate = reference["solution.py"]
         provenance = provenance or {"tipo": "benchmark"}
+        if provenance == {"tipo": "benchmark"}:
+            require(starting_candidate == reference["solution.py"] and feedback is None,
+                    "Partida original inconsistente")
+        else:
+            # Importación local: revisión reutiliza los procesos de este módulo.
+            from review_case import correction_context
+            expected_start, expected_feedback, expected_origin = correction_context(
+                Path(provenance["reparacion_previa"]),
+                Path(provenance["revision_previa"]) if provenance.get("revision_previa") else None,
+                project_root, expected_case=case_id,
+            )
+            require((starting_candidate, feedback, provenance)
+                    == (expected_start, expected_feedback, expected_origin),
+                    "Continuidad o feedback inconsistente")
         result["procedencia"] = provenance
         (run_dir / "partida.py").write_bytes(starting_candidate)
         (run_dir / "partida.diff").write_bytes(unified_diff(
@@ -383,7 +382,7 @@ def run_repair(case_id, project_root, *, reference=None, originals=None,
                 raise OSError("No se pudo iniciar el proceso de pruebas posteriores")
     except StopRepair:
         pass
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         result["errores_controlador"].append(str(exc))
 
     try:
@@ -438,7 +437,7 @@ def repair_case(case_id, project_root):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("caso", choices=("case_02",))
+    parser.add_argument("caso", choices=CASES)
     args = parser.parse_args(argv)
     return repair_case(args.caso, Path(__file__).resolve().parent)
 

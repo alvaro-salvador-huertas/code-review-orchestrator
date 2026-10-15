@@ -295,7 +295,7 @@ class TestRepairCase(unittest.TestCase):
         self.assert_originals()
 
     def test_cli_desde_otro_directorio_y_argumentos_invalidos(self):
-        for name in ("repair_case.py", "run_case.py", "case_evidence.py"):
+        for name in ("repair_case.py", "run_case.py", "case_evidence.py", "case_config.py"):
             shutil.copy2(PROJECT_ROOT / name, self.project / name)
         tool_dir = self.temporary / "bin"
         tool_dir.mkdir()
@@ -309,7 +309,7 @@ class TestRepairCase(unittest.TestCase):
         self.assertEqual(self.record()[1]["caso"], "case_02")
         self.assertFalse((self.temporary / "runs").exists())
         rejected = subprocess.run(
-            [sys.executable, "-B", str(self.project / "repair_case.py"), "case_01"],
+            [sys.executable, "-B", str(self.project / "repair_case.py"), "case_03"],
             cwd=self.temporary, env=environment, capture_output=True, timeout=10,
         )
         self.assertEqual(rejected.returncode, 2)

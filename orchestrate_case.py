@@ -7,7 +7,8 @@ import time
 from uuid import uuid4
 
 from case_evidence import digest, parse_json, read_regular, require, snapshot_tree, snapshot_matches
-from repair_case import inventory, load_reference, run_repair, timestamp, utc_timestamp, write_json
+from case_config import CASES, get_case, load_reference, reviewer_prompt_path
+from repair_case import inventory, run_repair, timestamp, utc_timestamp, write_json
 from review_case import correction_context, run_review, validate_repair, validate_review_record
 
 
@@ -42,7 +43,7 @@ def run_orchestration(case_id, project_root, max_attempts=2):
     started_at, started = utc_timestamp(), time.monotonic()
     root = Path(project_root).resolve()
     result = {
-        "caso": case_id, "version_contrato": 2, "registro": None,
+        "caso": case_id, "version_contrato": None, "registro": None,
         "inicio_utc": started_at.isoformat().replace("+00:00", "Z"),
         "max_intentos": max_attempts, "max_invocaciones": max_attempts * 2,
         "intentos": [], "invocaciones": {"desarrollador": 0, "revisor": 0, "total": 0},
@@ -61,7 +62,7 @@ def run_orchestration(case_id, project_root, max_attempts=2):
         checks = {
             "originales_intactos": inventory(root) == originals,
             "referencia_fija_intacta": snapshot_matches(run_dir / "referencia", fixed_hashes),
-            "instrucciones_revisor_intactas": read_regular(root / "prompts/reviewer.md") == prompt,
+            "instrucciones_revisor_intactas": read_regular(reviewer_prompt_path(root, case_id)) == prompt,
         }
         checks["registros_intactos"] = all(
             snapshot_matches(Path(path), hashes) for path, hashes in result["registros_sha256"].items()
@@ -77,6 +78,8 @@ def run_orchestration(case_id, project_root, max_attempts=2):
         result["invocaciones"]["total"] += calls
         require(result["invocaciones"]["total"] <= result["max_invocaciones"],
                 "Presupuesto de invocaciones excedido")
+        require(child.get("caso") == case_id or (child["codigo_salida"] not in (0, 1)
+                and "caso" not in child), "La etapa pertenece a otro caso")
         if child["registro"]:
             path = Path(child["registro"])
             # Los fallos de registro pueden carecer de resumen; se guardan sus diagnósticos.
@@ -86,17 +89,20 @@ def run_orchestration(case_id, project_root, max_attempts=2):
                         "El resultado interno y el registro no coinciden")
 
     try:
-        require(case_id == "case_02" and type(max_attempts) is int and max_attempts in (1, 2),
-                "Solo se admite case_02 y uno o dos intentos")
-        reference = load_reference(root)
-        require("**Versión 2" in reference["contrato.md"].decode("utf-8"),
-                "Se requiere el contrato de versión 2")
+        config = get_case(case_id)
+        require(type(max_attempts) is int and max_attempts in (1, 2),
+                "Solo se admiten uno o dos intentos")
+        result["version_contrato"] = config.contract_version
+        reference = load_reference(root, case_id)
+        if config.contract_version is not None:
+            require(f"**Versión {config.contract_version}" in reference["contrato.md"].decode("utf-8"),
+                    f"Se requiere el contrato de versión {config.contract_version}")
         originals = inventory(root)
-        prompt = read_regular(root / "prompts/reviewer.md")
+        prompt = read_regular(reviewer_prompt_path(root, case_id))
         require(prompt is not None and prompt.strip(), "Faltan las instrucciones del revisor")
         runs = root / "runs"
         runs.mkdir(exist_ok=True)
-        run_dir = runs / f"{started_at.strftime('%Y%m%dT%H%M%S%fZ')}_case_02_orchestrate_{uuid4().hex}"
+        run_dir = runs / f"{started_at.strftime('%Y%m%dT%H%M%S%fZ')}_{case_id}_orchestrate_{uuid4().hex}"
         run_dir.mkdir()
         result["registro"] = str(run_dir)
         (run_dir / "referencia").mkdir()
@@ -124,7 +130,7 @@ def run_orchestration(case_id, project_root, max_attempts=2):
             save()
             review = None
             if action != "detener":
-                validate_repair(Path(repair["registro"]), root, allow_test_failure=True)
+                validate_repair(Path(repair["registro"]), root, allow_test_failure=True, expected_case=case_id)
             if action == "revisar":
                 check_integrity()
                 review = run_review(Path(repair["registro"]), root)
@@ -149,7 +155,8 @@ def run_orchestration(case_id, project_root, max_attempts=2):
                 result.update(estado="intentos_agotados", codigo_salida=1)
                 break
             starting, feedback, provenance = correction_context(
-                Path(repair["registro"]), Path(review["registro"]) if review else None, root)
+                Path(repair["registro"]), Path(review["registro"]) if review else None, root,
+                expected_case=case_id)
             check_integrity()
         check_integrity()
     except IntegrityError as exc:
@@ -173,7 +180,7 @@ def run_orchestration(case_id, project_root, max_attempts=2):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("caso", choices=("case_02",))
+    parser.add_argument("caso", choices=CASES)
     parser.add_argument("--max-attempts", type=int, choices=(1, 2), default=2,
                         help="Incluye el intento inicial; 2 permite una corrección")
     args = parser.parse_args(argv)
