@@ -289,7 +289,7 @@ def validate_verdict(raw, line_count):
     return verdict
 
 
-def invoke_reviewer(workspace, final_path, prompt, log_dir):
+def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None):
     """Una sesión nueva de Codex: sin resume, fork ni llamada al desarrollador."""
     result = {"estado": "cli_no_disponible", "codigo_salida": None, "invocaciones": 0}
     for name, args in (("version", ["--version"]), ("ayuda", ["exec", "--help"])):
@@ -317,6 +317,8 @@ def invoke_reviewer(workspace, final_path, prompt, log_dir):
         "--output-schema", str(workspace / "respuesta.schema.json"),
         "--output-last-message", str(final_path), "-",
     ]
+    if on_invoke is not None:
+        on_invoke()
     try:
         execution = run_process(command, workspace, log_dir, AGENT_TIMEOUT_SECONDS, prompt=prompt,
                                 stdout_name="eventos.jsonl", stderr_name="stderr.txt")

@@ -48,6 +48,25 @@ class ProcessRecordError(OSError):
         self.result = result
 
 
+class ProcessInterrupted(KeyboardInterrupt):
+    """Interrupción propagada después de detener el proceso y guardar su salida."""
+
+    def __init__(self, result):
+        super().__init__("Proceso interrumpido")
+        self.result = result
+
+
+def stop_process(process):
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:
+        process.kill()
+    process.communicate()
+
+
 def run_process(command, workspace, log_dir, timeout, prompt=None,
                 stdout_name="stdout.txt", stderr_name="stderr.txt"):
     """Registrar los canales en disco y detener el grupo al agotar el tiempo."""
@@ -58,6 +77,7 @@ def run_process(command, workspace, log_dir, timeout, prompt=None,
         "inicio_utc": timestamp(), "limite_segundos": timeout,
         "estado": "error_inicio", "codigo_salida": None, "error": None,
     }
+    interrupted = False
     with (log_dir / stdout_name).open("wb") as stdout, (log_dir / stderr_name).open("wb") as stderr:
         try:
             with subprocess.Popen(
@@ -70,14 +90,11 @@ def run_process(command, workspace, log_dir, timeout, prompt=None,
                     result["estado"] = "finalizada"
                 except subprocess.TimeoutExpired:
                     result["estado"] = "tiempo_agotado"
-                    if os.name == "posix":
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                    else:
-                        process.kill()
-                    process.communicate()
+                    stop_process(process)
+                except KeyboardInterrupt:
+                    result["estado"] = "interrumpida"
+                    interrupted = True
+                    stop_process(process)
                 result["codigo_salida"] = process.returncode
         except OSError as exc:
             result["estado"] = "ausente" if isinstance(exc, FileNotFoundError) else "error_inicio"
@@ -88,7 +105,12 @@ def run_process(command, workspace, log_dir, timeout, prompt=None,
     try:
         write_json(log_dir / "resultado.json", result)
     except OSError as exc:
+        if interrupted:
+            result["error_registro"] = str(exc)
+            raise ProcessInterrupted(result) from exc
         raise ProcessRecordError(str(exc), result) from exc
+    if interrupted:
+        raise ProcessInterrupted(result)
     return result
 
 
