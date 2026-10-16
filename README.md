@@ -161,6 +161,16 @@ pruebas del inspector. En ambas validaciones los agentes usan una CLI simulada;
 los procesos Python de evaluación sí se ejecutan.
 [Historial de comprobaciones](docs/historial.md#comprobaciones-del-controlador).
 
+El [experimento controlado del revisor del 16 de octubre de 2026](evals/revisor/resultados-2026-10-16.md)
+registra cuatro revisiones reales de candidatos preparados: dos defectos
+detectados y dos aprobaciones justificadas mediante contraste automático de
+contratos, código y hallazgos. Es distinto de las 148 pruebas previas con Codex
+simulado y de la [validación posterior del progreso](evals/revisor/README.md#validación-local-del-lanzador):
+153 pruebas automatizadas, también sin llamadas reales al modelo. El informe
+distingue los mensajes intermedios observados del JSON
+final válido y matiza la interpretación de la exclusividad del formato;
+no acredita fiabilidad general ni un segundo intento de reparación.
+
 El [experimento multicaso del 15 de octubre de 2026](evals/resultados-multicaso-2026-10-15.md)
 consistió en una ejecución real por caso:
 
@@ -195,9 +205,9 @@ evalúa diagnóstico ciego. Las cuatro pruebas tampoco cubren por separado
 nombres que solo difieren en mayúsculas.
 
 La corrección automática, el agotamiento y las detenciones ante fallos tienen
-cobertura simulada; las dos ejecuciones reales solo observaron aprobación
-inicial. Pasar pruebas, recibir un dictamen y ser aprobado por el controlador
-son observaciones distintas. La comprobación del experimento fue una
+cobertura simulada; las dos ejecuciones multicaso del 15 de octubre solo
+observaron aprobación inicial. Pasar pruebas, recibir un dictamen y ser aprobado
+por el controlador son observaciones distintas. La comprobación del experimento fue una
 **revisión automática realizada por Codex**: no consta una revisión humana,
 ni el modelo, proveedor o esfuerzo de razonamiento efectivos de esos agentes.
 Las opciones de CLI conservadas no identifican toda la configuración efectiva.
@@ -215,6 +225,9 @@ aislamiento para código arbitrario no confiable.
   simuladas, ejecuciones reales y enlaces a los informes originales.
 - [Revisión para publicación](docs/revision-publicacion.md): alcance de la
   revisión de archivos e historial y datos personales detectados.
+- [Evaluación controlada del revisor](evals/revisor/README.md): candidatos,
+  comprobaciones locales y protocolo previo, con enlace a los resultados reales
+  del 16 de octubre.
 - [Pruebas del controlador](tests/), [contratos](tasks/), [benchmark](benchmark/)
   e [instrucciones de los revisores](prompts/).
 
