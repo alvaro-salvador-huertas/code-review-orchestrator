@@ -106,6 +106,14 @@ inválidos; **2** para argumentos incorrectos. No deben confundirse con los
 Las interfaces separadas de reparación y revisión se explican en la
 [guía de funcionamiento](docs/funcionamiento.md#interfaces).
 
+Está preparada la [primera tarea real: exportación JSON del inspector](evals/tareas_reales/inspect_json/README.md),
+con contrato versionado y aceptación externa basada en registros sintéticos.
+`--format json` y `--format text` aún no están implementados. Sus fallos iniciales
+se documentan aparte y no forman parte del descubrimiento habitual de `tests/`;
+su [controlador de desarrollo sobre una copia del proyecto](evals/tareas_reales/inspect_json/desarrollo.md)
+está preparado con una invocación máxima, sin aplicar cambios al inspector
+original. El intento real y la conexión del revisor siguen pendientes.
+
 Extracto de la consulta histórica del caso 01, conservado de la documentación
 anterior; no es una nueva ejecución:
 
