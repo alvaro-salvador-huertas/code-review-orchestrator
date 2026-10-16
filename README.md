@@ -118,13 +118,48 @@ Segundo intento: no registrado (no acredita corrección automática)
 Consulta: completada (código 0)
 ```
 
+## Pruebas automáticas (CI)
+
+El [workflow de pruebas](.github/workflows/tests.yml) se ejecuta en pull requests
+dirigidas a `main`, pushes a `main` y por lanzamiento manual desde GitHub Actions
+(disponible cuando el workflow esté en la rama predeterminada). Usa Ubuntu 24.04
+y Python 3.12, con un límite de 10 minutos y permisos `contents: read`.
+
+Comprueba las pruebas existentes del controlador: evaluación, reparación,
+revisión, orquestación, recorridos multicaso e inspección de registros. Codex se
+simula con ejecutables temporales y parches; no se instala Codex, no se inicia
+sesión, no se usan credenciales personales ni se llama a modelos. La suite crea
+sus propios registros temporales y no depende de los registros locales de `runs/`.
+
+Para ejecutar lo mismo localmente, desde la raíz del proyecto:
+
+```bash
+python3 -B -m unittest discover -s tests -v
+```
+
+El descubrimiento se limita a `tests/`: los originales de `benchmark/` contienen
+defectos intencionados y no tienen que superar CI. La suite sigue evaluando sus
+copias temporales y comprobando los resultados esperados. Un fallo de la suite
+marca el job como fallido, conservando su código de salida.
+
+Superar CI no demuestra la calidad general de los agentes. Mostrar un check
+tampoco lo convierte automáticamente en obligatorio para hacer merge: eso
+requiere configurarlo en las reglas o protecciones de la rama.
+
 ## Resultados observados
 
-La **última regresión documentada terminó con 126 pruebas correctas en
-40,147 s, código 0, sin llamadas reales al modelo**. Incluye 18 pruebas del
-inspector. Las pruebas de agentes usan una CLI simulada; sus procesos Python
-de evaluación sí se ejecutan. Se reutiliza ese resultado: esta reorganización
-documental no ha repetido pruebas. [Historial de comprobaciones](docs/historial.md#comprobaciones-del-controlador).
+La validación local del **16 de octubre de 2026** ejecutó el comando de la
+sección anterior con **Python 3.12.3: 126 pruebas correctas en 40,350 s,
+código 0, sin llamadas reales al modelo**. Los datos se confirmaron en el
+registro de esa ejecución; este ajuste documental no repite la suite. Es una
+validación local: la ejecución real en GitHub Actions está pendiente al
+preparar este cambio.
+
+Como resultado histórico, la regresión anterior terminó con **126 pruebas
+correctas en 40,147 s, código 0, sin llamadas reales al modelo**. Incluye 18
+pruebas del inspector. En ambas validaciones los agentes usan una CLI simulada;
+los procesos Python de evaluación sí se ejecutan.
+[Historial de comprobaciones](docs/historial.md#comprobaciones-del-controlador).
 
 El [experimento multicaso del 15 de octubre de 2026](evals/resultados-multicaso-2026-10-15.md)
 consistió en una ejecución real por caso:
