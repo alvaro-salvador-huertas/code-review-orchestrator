@@ -1,0 +1,19 @@
+{
+  "caso": "demo_inspector",
+  "registro": "revision",
+  "revisor": {
+    "estado": "finalizada",
+    "codigo_salida": 0,
+    "invocaciones": 1
+  },
+  "dictamen_modelo": {
+    "decision": "aprobar",
+    "hallazgos": []
+  },
+  "decision_controlador": "aprobada",
+  "codigo_salida": 0,
+  "integridad": {
+    "workspace_intacto": true
+  },
+  "errores_controlador": []
+}

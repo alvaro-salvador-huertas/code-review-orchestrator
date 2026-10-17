@@ -1,0 +1,25 @@
+{
+  "caso": "demo_inspector",
+  "registro": "reparacion",
+  "estado": "fallo_agente",
+  "codigo_salida": 3,
+  "agente": {
+    "estado": "finalizada",
+    "codigo_salida": 9,
+    "invocaciones": 1,
+    "error": "Fallo técnico sintético del agente para demostración."
+  },
+  "pruebas_iniciales": {
+    "estado": "finalizada",
+    "codigo_salida": 1
+  },
+  "pruebas_posteriores": {
+    "estado": "no_ejecutadas",
+    "codigo_salida": null
+  },
+  "integridad": {
+    "referencia_intacta": true
+  },
+  "errores_controlador": [],
+  "detencion": "fallo_agente"
+}

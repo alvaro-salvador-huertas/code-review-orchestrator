@@ -11,6 +11,27 @@ de evaluación, reparación y revisión, un orquestador y un inspector de regist
 Los candidatos se guardan aparte; los defectos originales del benchmark se
 conservan como punto de partida.
 
+## Demo sin modelo
+
+Desde un clon, con Python 3 y su biblioteca estándar, puedes consultar una
+demostración sin credenciales, Codex ni registros personales:
+
+```bash
+python3 -B inspect_run.py --run examples/inspect_run/aprobada
+python3 -B inspect_run.py --run examples/inspect_run/aprobada --format json
+```
+
+Ambos comandos completan la consulta con código **0**. Sustituye `aprobada` por
+`fallo_agente` para consultar con código **0** una ejecución registrada con
+código **3**, o por `incompleta` para obtener código **1** por un informe ausente.
+En JSON, las incidencias quedan en `consulta.incidencias`; el código del inspector
+es `consulta.codigo_salida` y el registrado es `ejecucion.codigo_salida`.
+
+Todos los registros, dictámenes, contadores e informes son **datos sintéticos**:
+no proceden de ejecuciones de agentes ni acreditan pruebas ejecutadas. Sirven
+exclusivamente para consultar con el inspector; no son registros autorizados
+para reparar o revisar candidatos. Consulta la [guía y procedencia de la demo](examples/inspect_run/README.md).
+
 ## Cómo funciona
 
 El controlador fija contrato y pruebas, evalúa la partida y encarga al
@@ -176,6 +197,14 @@ JSON, sin fallos ni errores y con código 0. Es el descubrimiento principal;
 las evaluaciones auxiliares de los fixtures no se suman a ese total. Este
 resultado no es una ejecución remota de GitHub Actions ni la regresión congelada
 de 153 métodos de la tarea.
+
+La validación local posterior de la demo, también del **17 de octubre de 2026**,
+obtuvo **242 métodos correctos en 73,015 segundos, código 0**: los **238 anteriores
+y cuatro nuevos** de [integración de la demo](tests/test_inspect_demo.py).
+Se conserva ese resultado ya obtenido; este ajuste documental no repite la suite.
+Las pruebas nuevas consultan los ejemplos sin ejecutar sus referencias. Los
+informes sintéticos de los ejemplos no acreditan pruebas realmente ejecutadas
+ni se suman a estos recuentos. Esta validación local es distinta de la CI remota.
 
 El descubrimiento se limita a `tests/`: los originales de `benchmark/` contienen
 defectos intencionados y no tienen que superar CI. La suite sigue evaluando sus

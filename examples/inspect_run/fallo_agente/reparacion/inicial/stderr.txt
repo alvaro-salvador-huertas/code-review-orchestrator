@@ -1,0 +1,14 @@
+INFORME SINTÉTICO DE DEMOSTRACIÓN; ninguna prueba fue ejecutada.
+test_repeticion (test_solution.DemoInspector.test_repeticion) ... FAIL
+test_vacio (test_solution.DemoInspector.test_vacio) ... ok
+
+======================================================================
+FAIL: test_repeticion (test_solution.DemoInspector.test_repeticion)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+AssertionError: fallo sintético preparado para la demo
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.001s
+
+FAILED (failures=1)
