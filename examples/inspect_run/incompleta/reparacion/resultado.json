@@ -1,0 +1,23 @@
+{
+  "caso": "demo_inspector",
+  "registro": "reparacion",
+  "estado": "supera_las_pruebas_disponibles",
+  "codigo_salida": 0,
+  "agente": {
+    "estado": "finalizada",
+    "codigo_salida": 0,
+    "invocaciones": 1
+  },
+  "pruebas_iniciales": {
+    "estado": "finalizada",
+    "codigo_salida": 1
+  },
+  "pruebas_posteriores": {
+    "estado": "finalizada",
+    "codigo_salida": 0
+  },
+  "integridad": {
+    "referencia_intacta": true
+  },
+  "errores_controlador": []
+}

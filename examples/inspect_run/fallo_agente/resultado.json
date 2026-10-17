@@ -1,0 +1,55 @@
+{
+  "caso": "demo_inspector",
+  "estado": "fallo_agente",
+  "codigo_salida": 3,
+  "max_intentos": 1,
+  "max_invocaciones": 2,
+  "invocaciones": {
+    "desarrollador": 1,
+    "revisor": 0,
+    "total": 1
+  },
+  "duracion_segundos": 1.0,
+  "integridad": {
+    "originales_intactos": true
+  },
+  "errores_controlador": [],
+  "intentos": [
+    {
+      "numero": 1,
+      "reparacion": {
+        "caso": "demo_inspector",
+        "registro": "reparacion",
+        "estado": "fallo_agente",
+        "codigo_salida": 3,
+        "agente": {
+          "estado": "finalizada",
+          "codigo_salida": 9,
+          "invocaciones": 1,
+          "error": "Fallo técnico sintético del agente para demostración."
+        },
+        "pruebas_iniciales": {
+          "estado": "finalizada",
+          "codigo_salida": 1
+        },
+        "pruebas_posteriores": {
+          "estado": "no_ejecutadas",
+          "codigo_salida": null
+        },
+        "integridad": {
+          "referencia_intacta": true
+        },
+        "errores_controlador": [],
+        "detencion": "fallo_agente"
+      },
+      "revision": null,
+      "transiciones": [
+        {
+          "etapa": "desarrollo",
+          "accion": "detener",
+          "motivo": "fallo_agente"
+        }
+      ]
+    }
+  ]
+}

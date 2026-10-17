@@ -1,0 +1,14 @@
+{
+  "tipo": "demostracion_sintetica",
+  "escenarios": [
+    "aprobada",
+    "fallo_agente",
+    "incompleta"
+  ],
+  "procedencia": "Todos los registros, dictámenes, contadores, duraciones, declaraciones de integridad, referencias e informes son datos sintéticos preparados para demostración.",
+  "proceden_de_ejecuciones_de_agentes": false,
+  "acreditan_pruebas_realmente_ejecutadas": false,
+  "uso_exclusivo": "Consulta con inspect_run.py; no son registros autorizados para reparar o revisar candidatos.",
+  "referencias": "Solo lectura mediante AST; no ejecutar ni importar el código de los ejemplos.",
+  "material_omitido_deliberadamente": "incompleta/reparacion/posterior/stderr.txt"
+}
