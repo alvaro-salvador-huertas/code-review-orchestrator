@@ -12,6 +12,7 @@ import time
 from uuid import uuid4
 
 from run_case import TIMEOUT_SECONDS, utc_timestamp
+from process_environment import process_environment
 from case_config import CASES, get_case, load_reference
 from case_evidence import (
     read_regular, digest, require, snapshot_matches, classify_test_report, unified_diff,
@@ -68,7 +69,7 @@ def stop_process(process):
 
 
 def run_process(command, workspace, log_dir, timeout, prompt=None,
-                stdout_name="stdout.txt", stderr_name="stderr.txt"):
+                stdout_name="stdout.txt", stderr_name="stderr.txt", *, env_policy="evaluation"):
     """Registrar los canales en disco y detener el grupo al agotar el tiempo."""
     log_dir.mkdir(exist_ok=True)
     started = time.monotonic()
@@ -76,14 +77,16 @@ def run_process(command, workspace, log_dir, timeout, prompt=None,
         "comando": command, "directorio_trabajo": str(workspace),
         "inicio_utc": timestamp(), "limite_segundos": timeout,
         "estado": "error_inicio", "codigo_salida": None, "error": None,
+        "politica_entorno": env_policy,
     }
     interrupted = False
     with (log_dir / stdout_name).open("wb") as stdout, (log_dir / stderr_name).open("wb") as stderr:
         try:
-            with subprocess.Popen(
+            with process_environment(env_policy) as environment, subprocess.Popen(
                 command, cwd=workspace, shell=False,
                 stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                 stdout=stdout, stderr=stderr, start_new_session=(os.name == "posix"),
+                env=environment,
             ) as process:
                 try:
                     process.communicate(input=prompt, timeout=timeout)
@@ -168,6 +171,7 @@ def invoke_codex(workspace, final_path, prompt, log_dir):
     version = run_process(
         [CODEX_EXECUTABLE, "--version"], workspace, log_dir / "version",
         PREFLIGHT_TIMEOUT_SECONDS,
+        env_policy="codex",
     )
     (log_dir / "codex_version.txt").write_bytes((log_dir / "version" / "stdout.txt").read_bytes())
     if version["estado"] != "finalizada" or version["codigo_salida"] != 0:
@@ -176,6 +180,7 @@ def invoke_codex(workspace, final_path, prompt, log_dir):
     help_result = run_process(
         [CODEX_EXECUTABLE, "exec", "--help"], workspace, log_dir / "ayuda",
         PREFLIGHT_TIMEOUT_SECONDS,
+        env_policy="codex",
     )
     help_text = (log_dir / "ayuda" / "stdout.txt").read_text(encoding="utf-8", errors="replace")
     required = ("--config", "--sandbox", "--cd", "--skip-git-repo-check",
@@ -200,6 +205,7 @@ def invoke_codex(workspace, final_path, prompt, log_dir):
         result = run_process(
             command, workspace, log_dir, AGENT_TIMEOUT_SECONDS, prompt=prompt,
             stdout_name="eventos.jsonl", stderr_name="errores.txt",
+            env_policy="codex",
         )
     except ProcessRecordError as exc:
         result = exc.result

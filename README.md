@@ -61,6 +61,11 @@ experimento fue `codex-cli 0.162.1`; no se garantiza compatibilidad con cualquie
 versión. Los controladores comprueban la disponibilidad y las opciones de la CLI.
 Necesitan escribir en `runs/` y crear workspaces temporales fuera del proyecto.
 
+Los procesos de evaluación reciben un entorno mínimo y configuración temporal;
+Codex usa una lista permitida distinta para conservar su autenticación. Consulta
+las [políticas, revisión de credenciales y límites](docs/credenciales-y-entornos.md).
+Este filtrado no constituye aislamiento del sistema de archivos o de la red.
+
 ## Uso desde la raíz del proyecto
 
 Para observar el defecto inicial **sin agentes**:
@@ -90,6 +95,7 @@ bloque Bash consulta **tu registro general**, incluso si la ejecución falló:
 ```bash
 read -r -p 'Ruta mostrada por el orquestador en Registro: ' REGISTRO_ORQUESTACION
 python3 -B inspect_run.py --run "$REGISTRO_ORQUESTACION"
+python3 -B inspect_run.py --run "$REGISTRO_ORQUESTACION" --format json
 ```
 
 El inspector muestra caso, estado, intentos, invocaciones, duración, pruebas,
@@ -106,13 +112,27 @@ inválidos; **2** para argumentos incorrectos. No deben confundirse con los
 Las interfaces separadas de reparación y revisión se explican en la
 [guía de funcionamiento](docs/funcionamiento.md#interfaces).
 
-Está preparada la [primera tarea real: exportación JSON del inspector](evals/tareas_reales/inspect_json/README.md),
-con contrato versionado y aceptación externa basada en registros sintéticos.
-`--format json` y `--format text` aún no están implementados. Sus fallos iniciales
-se documentan aparte y no forman parte del descubrimiento habitual de `tests/`;
-su [controlador de desarrollo sobre una copia del proyecto](evals/tareas_reales/inspect_json/desarrollo.md)
-está preparado con una invocación máxima, sin aplicar cambios al inspector
-original. El intento real y la conexión del revisor siguen pendientes.
+La exportación **`--format json` ya está incorporada localmente**. Devuelve un
+único objeto del [esquema v1](tasks/003-inspect-run-json.md), también en consultas
+incompletas, con incidencias dentro del objeto y stderr vacío. `consulta.codigo_salida`
+coincide con el código del inspector; `ejecucion.codigo_salida` conserva el del
+registro. Por ejemplo, una ejecución fallida con código 3 puede consultarse con
+código 0. Los valores desconocidos se conservan como `null`. Los argumentos
+inválidos devuelven 2, stdout vacío y diagnóstico en stderr. Omitir `--format`
+o usar `--format text` mantiene la presentación textual anterior.
+
+La [tarea inspect-json](evals/tareas_reales/inspect_json/README.md) comenzó con un
+desarrollo mediante el adaptador sobre una copia. Su rechazo inicial se conserva:
+la [reevaluación](evals/tareas_reales/inspect_json/reevaluacion-2026-10-17.md) ajustó
+una exigencia literal del evaluador que el contrato no imponía. Tras un timeout,
+la segunda revisión solicitó cambios por booleanos y duraciones; fueron
+contrastados y corregidos mediante asistencia de Codex bajo instrucciones del
+usuario. Otra revisión estática detectó el desbordamiento de recursión, después
+reproducido y corregido mediante comparación iterativa. La revisión del último
+diff se realizó en esta conversación y se autorizó incorporar esa entrega exacta.
+No fue una aprobación emitida por el controlador ni demuestra un ciclo automático
+completo de esta tarea. La [secuencia y sus límites](evals/tareas_reales/inspect_json/revision.md)
+conservan los dictámenes históricos y distinguen las correcciones asistidas.
 
 Extracto de la consulta histórica del caso 01, conservado de la documentación
 anterior; no es una nueva ejecución:
@@ -134,7 +154,12 @@ dirigidas a `main`, pushes a `main` y por lanzamiento manual desde GitHub Action
 y Python 3.12, con un límite de 10 minutos y permisos `contents: read`.
 
 Comprueba las pruebas existentes del controlador: evaluación, reparación,
-revisión, orquestación, recorridos multicaso e inspección de registros. Codex se
+revisión, orquestación, recorridos multicaso e inspección de registros. La
+[cobertura JSON permanente](tests/test_inspect_json.py) reutiliza aceptación,
+hallazgos y anidamiento con datos sintéticos: esquema, códigos y canales,
+desconocidos, valores inválidos, booleanos, enteros grandes y estructuras
+profundas, además de compatibilidad textual. No necesita ejecutar otra vez esos
+evaluadores por separado. Codex se
 simula con ejecutables temporales y parches; no se instala Codex, no se inicia
 sesión, no se usan credenciales personales ni se llama a modelos. La suite crea
 sus propios registros temporales y no depende de los registros locales de `runs/`.
@@ -144,6 +169,13 @@ Para ejecutar lo mismo localmente, desde la raíz del proyecto:
 ```bash
 python3 -B -m unittest discover -s tests -v
 ```
+
+La validación local del 17 de octubre de 2026 ejecutó ese comando una vez sobre
+el árbol actual: **238 métodos superados**, incluidos 29 de la nueva cobertura
+JSON, sin fallos ni errores y con código 0. Es el descubrimiento principal;
+las evaluaciones auxiliares de los fixtures no se suman a ese total. Este
+resultado no es una ejecución remota de GitHub Actions ni la regresión congelada
+de 153 métodos de la tarea.
 
 El descubrimiento se limita a `tests/`: los originales de `benchmark/` contienen
 defectos intencionados y no tienen que superar CI. La suite sigue evaluando sus

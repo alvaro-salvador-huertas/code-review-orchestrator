@@ -336,7 +336,7 @@ class TestOrchestrateCase(OrchestrationFixture, unittest.TestCase):
         self.assertEqual(self.observed_calls(), [])
 
     def test_cli_presupuesto_predeterminado_y_argumentos_invalidos(self):
-        for name in ("orchestrate_case.py", "repair_case.py", "review_case.py", "run_case.py", "case_evidence.py", "case_config.py"):
+        for name in ("orchestrate_case.py", "repair_case.py", "review_case.py", "run_case.py", "case_evidence.py", "case_config.py", "process_environment.py"):
             shutil.copy2(PROJECT / name, self.project / name)
         self.configure([{"candidate": self.good}], [{"response": json.dumps(APPROVAL)}])
         bin_dir = self.temporary / "bin"

@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import run_case
 
@@ -33,7 +33,7 @@ class TestRunCase(unittest.TestCase):
             )
             self.write_test(case_id=case_id)
         self.script = self.project / "run_case.py"
-        for name in ("run_case.py", "case_config.py", "case_evidence.py"):
+        for name in ("run_case.py", "case_config.py", "case_evidence.py", "process_environment.py"):
             shutil.copy2(PROJECT_ROOT / name, self.project / name)
 
     def write_test(self, body="self.assertEqual(VALOR, 7)", case_id="case_01"):
@@ -151,7 +151,7 @@ class TestRunCase(unittest.TestCase):
         self.assertIn("Código de salida de las pruebas: null", output)
         process.assert_called_once_with(
             result["comando"], cwd=directory / "workspace", shell=False,
-            capture_output=True, timeout=30, check=False,
+            capture_output=True, timeout=30, check=False, env=ANY,
         )
 
     def test_tiempo_agotado_sin_salida(self):

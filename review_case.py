@@ -294,7 +294,7 @@ def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None):
     result = {"estado": "cli_no_disponible", "codigo_salida": None, "invocaciones": 0}
     for name, args in (("version", ["--version"]), ("ayuda", ["exec", "--help"])):
         check = run_process([CODEX_EXECUTABLE] + args, workspace, log_dir / name,
-                            PREFLIGHT_TIMEOUT_SECONDS)
+                            PREFLIGHT_TIMEOUT_SECONDS, env_policy="codex")
         result[name] = check
         output = (log_dir / name / "stdout.txt").read_bytes()
         if name == "version":
@@ -321,7 +321,7 @@ def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None):
         on_invoke()
     try:
         execution = run_process(command, workspace, log_dir, AGENT_TIMEOUT_SECONDS, prompt=prompt,
-                                stdout_name="eventos.jsonl", stderr_name="stderr.txt")
+                                stdout_name="eventos.jsonl", stderr_name="stderr.txt", env_policy="codex")
     except ProcessRecordError as exc:
         execution = exc.result
         execution["error_registro"] = str(exc)

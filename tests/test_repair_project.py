@@ -73,7 +73,7 @@ class TestRepairProject(unittest.TestCase):
         self.write(controller.ACCEPTANCE, ACCEPTANCE)
         # Copia del controlador para sus pruebas de CLI; no entra en el commit base fixture.
         for name in ("repair_project.py", "project_test_runner.py", "repair_case.py", "run_case.py",
-                     "case_config.py", "case_evidence.py"):
+                     "case_config.py", "case_evidence.py", "process_environment.py"):
             self.write(name, (PROJECT / name).read_text())
         self.fake = self.temporary / "codex"
         self.settings = self.temporary / "opciones.json"

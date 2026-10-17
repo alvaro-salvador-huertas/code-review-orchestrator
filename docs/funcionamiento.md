@@ -18,6 +18,7 @@ de las etapas se enlazan por sus rutas explícitas, nunca buscando el más recie
 | `python3 -B review_case.py --run "$REGISTRO_REPARACION"` | Valida y revisa una reparación aceptada. | Como máximo un revisor |
 | `python3 -B orchestrate_case.py case_01 --max-attempts 2` | Coordina desarrollo, evaluación y revisión con presupuesto. | Hasta cuatro invocaciones |
 | `python3 -B inspect_run.py --run "$REGISTRO_ORQUESTACION"` | Consulta el registro general existente. | Ninguno |
+| `python3 -B inspect_run.py --run "$REGISTRO_ORQUESTACION" --format json` | Exporta la consulta con el esquema JSON v1. | Ninguno |
 
 `run_case.py`, `repair_case.py` y `orchestrate_case.py` aceptan `case_01` y
 `case_02`. La revisión identifica el caso a partir de la evidencia del registro,
@@ -93,6 +94,12 @@ inválidas, problemas de escritura e integridad alterada detienen la
 orquestación aunque quede presupuesto. No hay reintentos técnicos ni
 concurrencia. `intentos_agotados` significa que se consumió el presupuesto sin
 aprobación; no habilita un tercer intento.
+
+Los lanzadores actuales separan el entorno mínimo de evaluación del utilizado
+para autenticar Codex. Los registros nuevos identifican `politica_entorno` sin
+guardar valores de variables. Véanse las [listas permitidas, comprobaciones y
+límites](credenciales-y-entornos.md); esta protección no se atribuye a las
+implementaciones conservadas en registros históricos.
 
 La CLI independiente de reparación conserva una evaluación del archivo residual
 para diagnóstico si el agente falla y hay candidato. El orquestador utiliza su
@@ -197,6 +204,22 @@ El inspector presenta los campos del registro general y comprueba su coherencia
 con los JSON enlazados. Cuenta los intentos de la lista y toma invocaciones y
 presupuestos de los campos del controlador, sin contar eventos internos.
 
+El modo predeterminado y `--format text` conservan la presentación textual.
+`--format json`, incorporado localmente, devuelve exclusivamente un objeto del
+[esquema v1](../tasks/003-inspect-run-json.md): `version_esquema`, `consulta` y
+`ejecucion`. Los valores desconocidos son `null`; los datos válidos del general
+se conservan aunque una evidencia enlazada sea inválida. No incluye detalles
+por intento, dictámenes completos ni certificaciones de integridad.
+
+Con argumentos válidos, JSON deja stderr vacío e incluye las incidencias en
+`consulta.incidencias`. Devuelve 0 cuando completa la consulta y 1 si la evidencia
+es incompleta o incoherente; ambos resultados contienen JSON válido. Ese código
+coincide con `consulta.codigo_salida`, no necesariamente con
+`ejecucion.codigo_salida`: una ejecución fallida con código 3 puede consultarse
+con código 0. Los argumentos inválidos conservan código 2, stdout vacío y
+diagnóstico en stderr. La consulta JSON no prepara el formateo textual y conserva
+exactamente las duraciones enteras válidas, incluso mayores que el rango de float.
+
 Para calcular recuentos lee los JSON de evaluación, sus informes stderr y
 `referencia/test_solution.py` de cada reparación. Solo informa de pruebas
 superadas o cantidades cuando puede contrastar referencias, filas, total,
@@ -211,7 +234,7 @@ variables de entorno. Muestra dónde consultar esos materiales.
 no es un recálculo de hashes ni una auditoría independiente. Dos intentos
 registrados tampoco prueban por sí solos una corrección satisfactoria.
 
-Duración, configuración u otros datos ausentes se muestran como «no consta»;
+En texto, duración, configuración u otros datos ausentes se muestran como «no consta»;
 no se convierten en cero. Modelo, proveedor y esfuerzo no constan en el formato
 de resumen utilizado. Los mensajes de error se abrevian a 240 caracteres y
 se muestran hasta cinco errores del controlador por etapa; el resto se consulta
@@ -259,7 +282,10 @@ con 4. No se traducen los códigos de una CLI como si fueran los de otra.
 ## Comprobaciones y límites
 
 La suite del controlador usa fixtures temporales y agentes simulados. No
-necesita los registros personales de `runs/`. Para ejecutarla en otro momento:
+necesita los registros personales de `runs/`. Incluye los métodos de aceptación
+JSON, hallazgos y anidamiento mediante [clases de CI](../tests/test_inspect_json.py),
+sin duplicar las suites ni modificar sus aserciones. Las comprobaciones nuevas
+no dependen de Git histórico ni de credenciales. Para ejecutarla en otro momento:
 
 ```bash
 python3 -B -m unittest discover -s tests -v

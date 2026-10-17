@@ -295,7 +295,7 @@ class TestRepairCase(unittest.TestCase):
         self.assert_originals()
 
     def test_cli_desde_otro_directorio_y_argumentos_invalidos(self):
-        for name in ("repair_case.py", "run_case.py", "case_evidence.py", "case_config.py"):
+        for name in ("repair_case.py", "run_case.py", "case_evidence.py", "case_config.py", "process_environment.py"):
             shutil.copy2(PROJECT_ROOT / name, self.project / name)
         tool_dir = self.temporary / "bin"
         tool_dir.mkdir()
