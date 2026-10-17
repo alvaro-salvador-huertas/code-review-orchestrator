@@ -11,6 +11,7 @@ import time
 from uuid import uuid4
 
 from case_config import CASES, reference_paths
+from process_environment import process_environment
 
 TIMEOUT_SECONDS = 30
 
@@ -38,6 +39,7 @@ def run_case(case_id, project_root):
         "estado": "error_ejecucion",
         "codigo_salida_pruebas": None,
         "errores_controlador": errors,
+        "politica_entorno": "evaluation",
     }
 
     try:
@@ -67,14 +69,16 @@ def run_case(case_id, project_root):
         ]
         result["comando"] = command
         result["directorio_trabajo"] = str(workspace)
-        completed = subprocess.run(
-            command,
-            cwd=workspace,
-            shell=False,
-            capture_output=True,
-            timeout=TIMEOUT_SECONDS,
-            check=False,
-        )
+        with process_environment() as environment:
+            completed = subprocess.run(
+                command,
+                cwd=workspace,
+                shell=False,
+                capture_output=True,
+                timeout=TIMEOUT_SECONDS,
+                check=False,
+                env=environment,
+            )
         stdout = completed.stdout
         stderr = completed.stderr
         result["codigo_salida_pruebas"] = completed.returncode

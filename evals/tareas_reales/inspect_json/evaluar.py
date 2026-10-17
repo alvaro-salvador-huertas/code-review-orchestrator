@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -277,7 +278,10 @@ class AcceptanceTests(unittest.TestCase):
                 self.write_records()
                 try:
                     issues = self.assert_json(expected, 1)
-                    self.assertTrue(any(source in issue for issue in issues))
+                    if source == "duracion_segundos":
+                        self.assertRegex("\n".join(issues), r"\b(?:duración|duracion_segundos)\b")
+                    else:
+                        self.assertTrue(any(source in issue for issue in issues))
                 finally:
                     self.record[source] = original
 

@@ -19,6 +19,7 @@ from case_evidence import (
 )
 import repair_case
 import review_case
+from process_environment import process_environment
 
 
 PROJECT = Path(__file__).resolve().parent
@@ -28,7 +29,7 @@ CANDIDATES = (
 )
 RUNTIME_FILES = (
     "evaluate_reviewer.py", "review_case.py", "repair_case.py",
-    "run_case.py", "case_config.py", "case_evidence.py",
+    "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py",
 )
 ORIGIN = "candidatos_preparados_para_evaluacion"
 
@@ -112,10 +113,11 @@ def temporary_workspace(root, prefix):
 
 def record_git(root, destination, paths):
     def git(*args):
-        return subprocess.run(
-            ["git", "-C", str(root), *args], capture_output=True,
-            check=True, timeout=10,
-        ).stdout
+        with process_environment() as environment:
+            return subprocess.run(
+                ["git", "-C", str(root), *args], capture_output=True,
+                check=True, timeout=10, env=environment,
+            ).stdout
     revision = git("rev-parse", "HEAD").decode().strip()
     branch = git("branch", "--show-current").decode().strip()
     status = git("status", "--porcelain=v1", "--untracked-files=all", "--", *paths).decode()

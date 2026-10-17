@@ -1,16 +1,40 @@
 # Primer flujo de desarrollo de inspect-json
 
-El comando preparado para un futuro intento es:
+El comando que inicia un intento nuevo es:
 
 ```bash
 python3 -B repair_project.py inspect-json
 ```
 
-**Ese comando puede invocar Codex real. No se ha lanzado el intento real al
+**Ese comando puede invocar Codex real. No se lanzó el intento real al
 implementar este controlador.** La validación de este hito utiliza una CLI
 simulada y proyectos sintéticos temporales; no implementa la exportación JSON.
 El [contrato 003](../../../tasks/003-inspect-run-json.md), la aceptación y las
 pruebas anteriores permanecen intactos. Todavía no se conecta al agente revisor.
+
+El 17 de octubre de 2026 se preparó la rama para el primer intento real, pero
+la restricción de red del entorno se comprobó antes de lanzarlo. El
+[informe de esa preparación](primer-intento-2026-10-17.md) conserva el
+impedimento y el comando para la terminal: no hubo invocaciones, evaluaciones
+nuevas ni entrega del agente.
+
+Después se realizó el primer intento real y una
+[reevaluación del mismo candidato](reevaluacion-2026-10-17.md). El intento conserva
+su rechazo original por dos aserciones de diagnóstico. La reevaluación emplea
+el evaluador revisado, conserva el contrato y la entrega, y supera 14 métodos
+de aceptación y seis comprobaciones específicas. Reutiliza la regresión
+histórica de 153 métodos; no usa este comando ni inicia otro agente. En ese hito
+quedó pendiente la revisión independiente. El ajuste afecta al evaluador del árbol actual,
+nunca a las referencias congeladas de los registros anteriores.
+
+La [revisión independiente](revision.md) dispone ahora de un adaptador separado
+que recibe el desarrollo y la reevaluación explícitamente. Este flujo de
+desarrollo no lo invoca automáticamente. La primera revisión real terminó por
+timeout, sin dictamen; la segunda revisión, con contexto reducido, solicitó
+cambios. La guía de revisión documenta su contraste, las correcciones asistidas
+por Codex bajo instrucciones del usuario y la incorporación local posterior de
+la entrega autorizada. El último diff se revisó en esta conversación; no fue
+una aprobación del controlador ni un ciclo automático completo de esta tarea.
 
 ## Preparación y autoridad
 

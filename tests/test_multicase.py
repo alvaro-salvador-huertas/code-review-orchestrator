@@ -59,7 +59,7 @@ class TestMulticase(support.OrchestrationFixture, unittest.TestCase):
         self.assertEqual(snapshot_tree(self.project / "runs"), before)
 
     def test_cli_reparacion_y_revision_de_ambos_casos_desde_otro_directorio(self):
-        for name in ("repair_case.py", "review_case.py", "run_case.py", "case_evidence.py", "case_config.py"):
+        for name in ("repair_case.py", "review_case.py", "run_case.py", "case_evidence.py", "case_config.py", "process_environment.py"):
             shutil.copy2(support.PROJECT / name, self.project / name)
         bin_dir = self.temporary / "bin"
         bin_dir.mkdir()

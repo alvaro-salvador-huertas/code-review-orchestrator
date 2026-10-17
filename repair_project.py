@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from case_evidence import digest, parse_json, read_regular, require, unified_diff
 from repair_case import ProcessInterrupted, ProcessRecordError, run_process, timestamp, write_json
+from process_environment import process_environment
 
 
 PROJECT = Path(__file__).resolve().parent
@@ -134,8 +135,9 @@ def freeze(root, destination):
     require(match is not None, "El contrato no indica un commit base completo")
     base = match[1].decode()
     def git(*args):
-        return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                              check=True, timeout=10).stdout
+        with process_environment() as environment:
+            return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                                  check=True, timeout=10, env=environment).stdout
     require(git("rev-parse", base + "^{commit}").decode().strip() == base, "Base no disponible")
     destination.mkdir()
     source = destination / "proyecto"
@@ -249,7 +251,8 @@ def develop(workspace, log, prompt, result, progress, save):
     (log / "entrada.txt").write_bytes(prompt)
     agent = result["agente"]
     for name, arguments in (("version", ["--version"]), ("ayuda", ["exec", "--help"])):
-        agent[name] = run_process([CODEX_EXECUTABLE, *arguments], workspace, log / name, PREFLIGHT_TIMEOUT)
+        agent[name] = run_process([CODEX_EXECUTABLE, *arguments], workspace, log / name, PREFLIGHT_TIMEOUT,
+                                  env_policy="codex")
         check_process(agent[name])
         if agent[name]["codigo_salida"] != 0:
             raise StopProject(3, "fallo_tecnico", f"Consulta CLI fallida: {name}")
@@ -274,7 +277,7 @@ def develop(workspace, log, prompt, result, progress, save):
     agent["invocaciones"] = 1
     try:
         agent["proceso"] = run_process(command, workspace, log, AGENT_TIMEOUT, prompt=prompt,
-                                       stdout_name="eventos.jsonl")
+                                       stdout_name="eventos.jsonl", env_policy="codex")
     except (ProcessInterrupted, ProcessRecordError) as exc:
         agent["proceso"] = exc.result
         raise

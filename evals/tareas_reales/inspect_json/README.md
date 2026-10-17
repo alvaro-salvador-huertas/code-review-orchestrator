@@ -2,13 +2,16 @@
 
 Preparación del 16 de octubre de 2026 sobre `main`, commit base
 `9bec53279d82058fe188c0038bab5ba66ce64003`, en `feat/tarea-inspector-json`.
-El árbol estaba limpio. La funcionalidad todavía **no está implementada**.
+El árbol estaba limpio. Esa preparación no incorporó la funcionalidad.
+**Actualización del 17 de octubre: `--format json` ya está incorporado localmente**
+con la entrega autorizada `8abca500…e7b87`, después de las revisiones y correcciones
+descritas en la [guía de revisión y estado](revision.md).
 
 La tarea permite consumir la consulta desde otras herramientas sin analizar
 su presentación textual. El [contrato v1](../../../tasks/003-inspect-run-json.md)
 separa el éxito de la consulta del resultado de la ejecución registrada y
 preserva como `null` los datos desconocidos. No se ha añadido un caso defectuoso
-al benchmark ni se ha invocado a ningún agente.
+al benchmark. En aquel hito de preparación no se invocó a ningún agente.
 
 ## Evaluador de aceptación
 
@@ -50,8 +53,12 @@ Las 14 pruebas (con variantes mediante `subTest`) comprueban:
 
 El evaluador devuelve **0** si todo pasa, **1** si hay fallos o errores, y **2**
 si sus propios argumentos son inválidos. No contiene `expectedFailure`, omisiones
-ni conversión de fallos de aceptación en éxito. Está fuera de `tests/` y no lo
-ejecuta el descubrimiento habitual de CI. Su [referencia inicial](referencia-inicial.md)
+ni conversión de fallos de aceptación en éxito. El módulo sigue fuera de `tests/`,
+pero sus 14 métodos se reutilizan ahora en el descubrimiento habitual mediante
+[`tests/test_inspect_json.py`](../../../tests/test_inspect_json.py), junto a las
+seis comprobaciones de hallazgos, siete de anidamiento y dos métodos textuales
+adicionales. No hace falta repetir las suites por separado al ejecutar CI.
+Su [referencia inicial](referencia-inicial.md)
 conserva el resultado contra el inspector que todavía no admite `--format`.
 
 ## Plan previo de incorporación al flujo de agentes
@@ -88,6 +95,52 @@ El plan fijado al preparar la tarea fue:
 El hito de preparación no implementó ese adaptador ni inició agentes. El
 [primer flujo de desarrollo](desarrollo.md), añadido después, prepara
 `python3 -B repair_project.py inspect-json` con copias del proyecto y una sola
-invocación máxima. Se valida con una CLI simulada; el intento real sigue sin
-lanzarse y la integración del revisor permanece pendiente. No cambia la
+invocación máxima. Se validó con una CLI simulada; entonces el intento real
+seguía sin lanzarse. En ese hito la revisión real permanecía pendiente. No cambia la
 referencia inicial ni las pruebas de aceptación anteriores.
+
+## Preparación del primer intento real — 17 de octubre de 2026
+
+El [informe de preparación y bloqueo del entorno](primer-intento-2026-10-17.md)
+documenta la rama `eval/inspect-json-primer-intento`, la ausencia de intentos
+previos y la restricción de red conocida antes de ejecutar. El adaptador no se
+lanzó: **0 invocaciones de agentes**, sin evaluaciones nuevas, registro ni
+candidato. El comando quedó preparado para una terminal con acceso al servicio.
+La base congelada se conserva. Ese informe describe únicamente la preparación.
+
+## Primer intento real y reevaluación — 17 de octubre de 2026
+
+El [informe de resultados y reevaluación](reevaluacion-2026-10-17.md) documenta
+el intento real posterior: una invocación del desarrollador, código del agente
+0 y resultado del controlador `no_supera_comprobaciones`, código 1. Fallaron
+dos subtests de un método por exigir el nombre literal `duracion_segundos`
+en una incidencia que decía «general: duración inválida».
+
+El contrato permite identificar el campo sin fijar esa redacción. Se ajustó
+solo esa aserción para aceptar `duración` o `duracion_segundos` como palabras
+completas; permanecen las comprobaciones de valores, tipos, códigos, canales,
+esquema y conservación. Las [seis comprobaciones específicas](../../../tests/test_inspect_json_evaluator.py)
+verifican ambas denominaciones y rechazan mensajes sin localización, otros
+campos y valores inválidos conservados pese a un diagnóstico correcto.
+
+Un registro nuevo conserva **14/14 métodos de aceptación y 6/6 comprobaciones
+específicas superados**, con código 0. Se evaluó exactamente el mismo candidato
+y se reutilizó la regresión histórica de **153/153**, tras comprobar hashes y
+materiales. No se repitió esa suite ni se invocaron agentes. El registro inicial
+conserva su rechazo; en ese hito quedó pendiente la revisión independiente.
+
+## Adaptador de revisión independiente
+
+Está preparado [`review_project.py`](../../../review_project.py), con dos
+entradas explícitas: el desarrollo original rechazado y su reevaluación.
+Comprueba su correspondencia antes de autorizar una sesión de revisión estática
+de solo lectura. La [guía de revisión](revision.md) conserva el comando exacto,
+los códigos, límites y resultados de validación con Codex simulado.
+La primera revisión real agotó sus 180 segundos, con una invocación y sin dictamen.
+La segunda, con contexto reducido, solicitó cambios. Las correcciones de booleanos,
+duraciones y, tras otra revisión estática, de recursión fueron asistidas por Codex
+bajo instrucciones del usuario; no proceden de un bucle automático del adaptador.
+La revisión del último diff se realizó en esta conversación antes de autorizar
+su incorporación exacta. La guía conserva los dictámenes históricos sin
+convertirlos en aprobaciones del controlador. Los registros permanecen excluidos
+de Git; las nuevas pruebas de CI utilizan únicamente fixtures temporales.
