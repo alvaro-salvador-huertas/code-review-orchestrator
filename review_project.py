@@ -1,10 +1,11 @@
-"""Revisión estática de inspect-json, autorizada por desarrollo y reevaluación explícitos."""
+"""Revisión estática de inspect-json: vía histórica o intento explícito de orquestación."""
 
 import argparse
 import ast
 import hashlib
 import json
 import math
+import os
 from pathlib import Path, PurePosixPath
 import re
 import signal
@@ -25,6 +26,8 @@ from process_environment import process_environment
 
 SPECIFIC = "tests/test_inspect_json_evaluator.py"
 PROMPT = "prompts/reviewer_inspect_json.md"
+ISOLATED_REVIEW = "revision_aislada_inspect_json_v1"
+REVIEW_TIMEOUT_RANGE = (60, 600)
 REEVALUATION = "reevaluacion_mismo_candidato_evaluador_revisado"
 REVIEW_FILES = {
     "contrato.md": "contrato.md", "inspect_run.py": "inspect_run.py",
@@ -392,6 +395,180 @@ def validate_verdict(raw, line_count):
 
 
 def run_review(development_run, reevaluation_run, project_root=PROJECT, *, progress=None):
+    return _run_review(lambda: validate_evidence(development_run, reevaluation_run, project_root),
+                       review_materials, Path(project_root) / PROMPT, project_root, progress=progress)
+
+
+def run_delivery_review(delivery_run, project_root=PROJECT, *, progress=None, on_invoke=None):
+    """Revisar una entrega nueva completa; no acepta la procedencia histórica."""
+    from project_flow import REVIEW_PROMPT, delivery_review_evidence, delivery_review_materials
+    frozen = Path(delivery_run).absolute().parent.parent.parent / "referencia"
+    def reserve():
+        require(on_invoke is not None, "La entrega nueva requiere una reserva del orquestador; no hay reanudación")
+        on_invoke()
+    return _run_review(lambda: delivery_review_evidence(delivery_run, project_root),
+                       delivery_review_materials, frozen / REVIEW_PROMPT, project_root,
+                       progress=progress, on_invoke=reserve,
+                       preparation="Validando entrega nueva y sus evaluaciones completas.")
+
+
+def orchestration_review_evidence(orchestration_run, attempt, project_root=PROJECT):
+    """Autorizar por lectura una entrega explícita de un flujo cerrado, sin reevaluar."""
+    from project_flow import TYPE, LIMITS, delivery_review_evidence
+    require(type(attempt) is int and attempt in (1, 2), "Intento explícito inválido")
+    origin = Evidence(orchestration_run)
+    try:
+        summary = origin.json("resultado.json")
+        require(summary["tipo"] == TYPE and summary["tarea"] == "inspect-json"
+                and summary["registro"] == str(origin.path), "Registro de orquestación incoherente")
+        closed_states = {"lista_para_revision_humana": 0, "intentos_agotados": 1,
+                         "fallo_tecnico": 3, "fallo_revisor": 3, "tiempo_agotado": 4,
+                         "tiempo_agotado_revisor": 4, "respuesta_invalida": 5,
+                         "modificacion_no_permitida": 6, "evidencia_invalida": 7,
+                         "preparacion_no_autoriza": 7, "fallo_controlador": 8, "interrumpida": 9}
+        require(isinstance(summary["fin_utc"], str) and summary["fin_utc"] >= summary["inicio_utc"]
+                and type(summary["codigo_salida"]) is int
+                and closed_states.get(summary["estado"]) == summary["codigo_salida"]
+                and summary["lista_para_revision_humana"] is (summary["codigo_salida"] == 0),
+                "Orquestación no cerrada o resultado incoherente")
+        integrity_flags(summary["integridad"], ("original_intacto", "referencia_intacta",
+                                               "registros_intactos", "alcance_respetado"))
+        config = origin.json("referencia/configuracion.json")
+        require(summary["procedencia"] == origin.json("referencia/procedencia.json")
+                and summary["referencia_sha256"] == origin.subtree("referencia")
+                and summary["limites_segundos"] == LIMITS
+                and type(summary["max_intentos"]) is int
+                and summary["max_intentos"] == config["max_intentos"]
+                and type(summary["max_invocaciones"]) is int
+                and summary["max_invocaciones"] == 2 * summary["max_intentos"]
+                and summary["incorporacion"] == "no_realizada", "Configuración de origen incoherente")
+        entries = summary["intentos"]
+        require(isinstance(entries, list) and 1 <= len(entries) <= summary["max_intentos"]
+                and all(type(e["numero"]) is int and e["numero"] == n
+                        for n, e in enumerate(entries, 1)), "Intentos incompletos o duplicados")
+        require(attempt <= len(entries), "El intento seleccionado no existe")
+        entry = entries[attempt - 1]
+        delivery = origin.path / "intentos" / str(attempt) / "evidencia"
+        require(entry["registro"] == str(delivery), "Entrega enlazada de otro origen")
+        evidence, authorization, sources = delivery_review_evidence(delivery, project_root)
+        record = parse_json(evidence["evidencia/resultado.json"])
+        require(all(entry[key] == record[key] for key in
+                    ("numero", "registro", "partida_sha256", "candidato_sha256", "desarrollo", "evaluaciones")),
+                "Resumen del intento mezclado con otra entrega")
+        require(summary["inicial"] == {kind: origin.json(f"inicial/{kind}/evaluacion.json")
+                                      for kind in ("aceptacion", "regresion")}, "Preparación mezclada")
+        seals = summary["etapas_cerradas"]
+        required = {str(delivery), str(origin.path / "inicial"),
+                    *(str(delivery / name) for name in ("desarrollo", "entrega")),
+                    *(str(delivery / "evaluaciones" / kind) for kind in record["evaluaciones"])}
+        totals = {"desarrollador": 0, "revisor": 0}
+        reservations, reservation_names, linked = [], set(), {}
+        for item in entries:
+            number = item["numero"]
+            require(item["registro"] == str(origin.path / "intentos" / str(number) / "evidencia"),
+                    "Intento enlazado de otro origen")
+            previous_record = origin.json(f"intentos/{number}/evidencia/resultado.json")
+            require(all(item[key] == previous_record[key] for key in
+                        ("numero", "registro", "partida_sha256", "candidato_sha256", "desarrollo", "evaluaciones")
+                        if key in item), "Resumen de otro intento mezclado")
+            required.add(item["registro"])
+            require(set(item["invocaciones"]) == set(totals), "Roles de origen inválidos")
+            require(item["invocaciones"]["desarrollador"] == previous_record["desarrollo"]["agente"]["invocaciones"],
+                    "Consumo de desarrollo incoherente")
+            for role in totals:
+                count = item["invocaciones"][role]
+                require(type(count) is int and count in (0, 1), "Reserva de origen excedida")
+                totals[role] += count
+                if count:
+                    name = f"reservas/{number}-{role}"
+                    reservation = origin.json(name + "/reserva.json")
+                    require(reservation["rol"] == role and type(reservation["intento"]) is int
+                            and reservation["intento"] == number
+                            and reservation["estado"] == "reservada_antes_de_invocar"
+                            and reservation["limite_segundos"] == LIMITS[role], "Reserva de origen incoherente")
+                    reservations.append(reservation)
+                    reservation_names.add(f"{number}-{role}")
+                    required.add(str(origin.path / name))
+            if item["revision"] is not None:
+                path = Path(item["revision"]["registro"])
+                require(path.parent == origin.path.parent and path != origin.path
+                        and re.fullmatch(r"\d{8}T\d{6}Z_inspect-json_review_[0-9a-f]{32}", path.name),
+                        "Referencia de revisión inválida")
+                reviewed = Evidence(path)
+                require(reviewed.json("resultado.json") == item["revision"], "Revisión enlazada mezclada")
+                require(item["invocaciones"]["revisor"] == item["revision"]["revisor"]["invocaciones"],
+                        "Consumo de revisión incoherente")
+                linked[str(path)] = reviewed
+                required.add(str(path))
+            else:
+                require(item["invocaciones"]["revisor"] == 0, "Revisión reservada sin resultado cerrado")
+        require({name.split("/")[0] for name in origin.subtree("reservas")} == reservation_names,
+                "Reservas omitidas o ajenas al resumen")
+        require(summary["reservas"] == reservations and summary["invocaciones"] == {
+            **totals, "total": sum(totals.values())}
+            and all(type(v) is int for v in summary["invocaciones"].values()), "Consumos de origen incoherentes")
+        require(required <= seals.keys(), "Faltan manifiestos de etapas pertinentes")
+        for name, state in seals.items():
+            path = Path(name)
+            if name in linked:
+                actual = linked[name].state
+            else:
+                require(path.is_absolute() and ".." not in path.parts and origin.path in path.parents,
+                        "Manifiesto ajeno al origen")
+                relative = path.relative_to(origin.path).as_posix()
+                require(origin.state.get(relative, {}).get("tipo") == "directorio", "Etapa ausente")
+                actual = origin.subtree(relative)
+            require(actual == state, f"Etapa cerrada alterada: {name}")
+        sources = (origin, *sources, *linked.values())
+        require(all(source.unchanged() for source in sources), "Origen alterado durante la validación")
+        authorization.update(operacion=ISOLATED_REVIEW, orquestacion=str(origin.path), intento=attempt,
+                             resultado_origen_sha256=digest(origin.read("resultado.json")),
+                             resultado_origen={key: summary[key] for key in
+                                               ("estado", "codigo_salida", "invocaciones")})
+        # Se archiva la procedencia, pero nunca entra en los materiales del modelo.
+        evidence["evidencia/orquestacion_resultado.json"] = origin.read("resultado.json")
+        return evidence, authorization, sources
+    except (KeyError, TypeError, AttributeError, IndexError) as exc:
+        raise ValueError(f"Orquestación incompleta o inválida: {exc}") from exc
+
+
+def persist_review_json(path, data, *, exclusive=False):
+    """Persistir antes de lanzar; la reserva exclusiva jamás se reutiliza ni se borra."""
+    target = path if exclusive else path.with_suffix(".tmp")
+    with target.open("x" if exclusive else "w", encoding="utf-8") as stream:
+        json.dump(data, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    if not exclusive:
+        target.replace(path)
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def run_isolated_review(orchestration_run, attempt, operation_id, project_root=PROJECT, *,
+                        review_timeout=180, progress=None):
+    """Operación independiente identificada explícitamente; nunca reanuda el origen."""
+    from project_flow import REVIEW_PROMPT, delivery_review_materials
+    require(isinstance(operation_id, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}", operation_id),
+            "Identificador de operación inválido (1–80 letras ASCII, números, guion o subrayado)")
+    require(type(review_timeout) is int and REVIEW_TIMEOUT_RANGE[0] <= review_timeout <= REVIEW_TIMEOUT_RANGE[1],
+            "El límite de revisión debe ser un entero entre 60 y 600 segundos")
+    operation = {"tipo": ISOLATED_REVIEW, "id": operation_id,
+                 "orquestacion": str(Path(orchestration_run).absolute()), "intento": attempt,
+                 "limite_solicitado_segundos": review_timeout, "limite_efectivo_segundos": review_timeout,
+                 "max_invocaciones": 1, "reanudacion": False}
+    return _run_review(lambda: orchestration_review_evidence(orchestration_run, attempt, project_root),
+                       delivery_review_materials, Path(orchestration_run) / "referencia" / REVIEW_PROMPT,
+                       project_root, progress=progress, operation=operation,
+                       preparation="Validando intento explícito y evidencia de la orquestación cerrada.")
+
+
+def _run_review(load_evidence, select_materials, prompt_path, project_root, *, progress=None, on_invoke=None,
+                preparation="Validando desarrollo, reevaluación y regresión histórica.", operation=None):
     root = Path(project_root).resolve()
     started = time.monotonic()
     result = {"tarea": "inspect-json", "registro": None, "inicio_utc": timestamp(),
@@ -402,31 +579,52 @@ def run_review(development_run, reevaluation_run, project_root=PROJECT, *, progr
               "limites_segundos": {"revisor": 180, "consulta_cli": 10},
               "integridad": {}, "error": None}
     log = archive = None
+    timeout = operation["limite_efectivo_segundos"] if operation else 180
+    result["limites_segundos"]["revisor"] = timeout
+    if operation:
+        result["operacion"] = operation
+    operation_bytes = reservation_bytes = None
     def save():
         if log is not None:
-            write_json(log / "resultado.json", result)
+            (persist_review_json if operation else write_json)(log / "resultado.json", result)
     def notify(message):
         if progress is not None:
             progress(message)
     def stop(code, state, message=None):
         result.update(codigo_salida=code, decision_controlador=state, error=message)
     try:
-        notify("Validando desarrollo, reevaluación y regresión histórica.")
-        evidence, authorization, sources = validate_evidence(development_run, reevaluation_run, root)
-        materials, selection = review_materials(evidence, authorization)
+        notify(preparation)
+        evidence, authorization, sources = load_evidence()
+        materials, selection = select_materials(evidence, authorization)
         require(all(source.path != root / "runs" and source.path not in (root / "runs").parents for source in sources),
                 "El registro nuevo quedaría dentro de una entrada")
         result["evidencia_previa_valida"] = True
         original_state = tree_state(root, filter_local=True)
-        prompt = read_regular(root / PROMPT)
+        prompt = read_regular(prompt_path)
         require(prompt is not None and prompt.strip(), "Faltan las instrucciones específicas")
         line_count = len(materials["inspect_run.py"].splitlines())
         parent = Path(tempfile.gettempdir()).resolve()
         require(parent != root and root not in parent.parents, "El workspace debe estar fuera del proyecto")
         (root / "runs").mkdir(exist_ok=True)
-        log = root / "runs" / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "_inspect-json_review_" + uuid4().hex)
-        log.mkdir()
+        name = ("inspect-json_isolated-review_" + operation["id"] if operation else
+                time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "_inspect-json_review_" + uuid4().hex)
+        destination = root / "runs" / name
+        require(all(destination.resolve() != s.path.resolve() and s.path.resolve() not in destination.resolve().parents
+                    for s in sources), "La operación quedaría dentro de una entrada")
+        try:
+            destination.mkdir()
+        except FileExistsError:
+            if not operation:
+                raise
+            stop(10, "operacion_ya_existente", "El identificador ya tiene registro; no se permite repetir ni reanudar")
+            return result
+        log = destination
         result["registro"] = str(log)
+        if operation:
+            operation.update(candidato_sha256=authorization["candidato_sha256"],
+                             resultado_origen_sha256=authorization["resultado_origen_sha256"])
+            persist_review_json(log / "operacion.json", operation, exclusive=True)
+            operation_bytes = read_regular(log / "operacion.json")
         write_json(log / "origen.json", {"autorizacion": authorization,
                                          "registros": {str(s.path): s.state for s in sources}})
         origin_bytes = (log / "origen.json").read_bytes()
@@ -468,17 +666,37 @@ def run_review(development_run, reevaluation_run, project_root=PROJECT, *, progr
                                          "origenes_intactos": all(s.unchanged() for s in sources),
                                          "autorizacion_intacta": read_regular(log / "origen.json") == origin_bytes,
                                          "entrada_intacta": read_regular(agent_log / "entrada.txt") == prompt}
+                if operation:
+                    result["integridad"].update(
+                        operacion_intacta=read_regular(log / "operacion.json") == operation_bytes,
+                        reserva_intacta=(read_regular(log / "reserva.json") == reservation_bytes))
                 require(all(result["integridad"].values()), "Integridad alterada durante la revisión")
             def reserve():
+                nonlocal reservation_bytes
                 check()
                 require(not result["reserva_invocacion"], "Invocación ya reservada")
+                if operation:
+                    try:
+                        persist_review_json(log / "reserva.json", {
+                            "operacion": operation["id"], "rol": "revisor", "fecha_utc": timestamp(),
+                            "estado": "reservada_antes_de_invocar", "max_invocaciones": 1,
+                            "candidato_sha256": authorization["candidato_sha256"],
+                            "limite_solicitado_segundos": operation["limite_solicitado_segundos"],
+                            "limite_efectivo_segundos": timeout}, exclusive=True)
+                    finally:
+                        reservation_bytes = read_regular(log / "reserva.json")
                 result["reserva_invocacion"] = True
+                if operation:
+                    result["revisor"]["invocaciones"] = 1
                 save()
+                if on_invoke is not None:
+                    on_invoke()
                 result["revisor"]["invocaciones"] = 1
-                notify("Revisión 1/1: iniciando Codex en una sesión nueva, límite 180 s.")
+                notify(f"Revisión 1/1: iniciando Codex en una sesión nueva, límite {timeout} s.")
             try:
                 check()
-                result["revisor"] = invoke_reviewer(workspace, final, prompt, agent_log, on_invoke=reserve)
+                options = {"timeout": timeout} if operation else {}
+                result["revisor"] = invoke_reviewer(workspace, final, prompt, agent_log, on_invoke=reserve, **options)
             except ProcessInterrupted as exc:
                 result["revisor"].update(exc.result)
                 raise
@@ -518,6 +736,8 @@ def run_review(development_run, reevaluation_run, project_root=PROJECT, *, progr
     finally:
         result.update(fin_utc=timestamp(), duracion_segundos=time.monotonic() - started)
         try:
+            if operation and log is not None and (log / "revisor").is_dir():
+                result["revisor_sha256"] = tree_state(log / "revisor")
             save()
         except OSError as exc:
             stop(8, "fallo_controlador", f"No se pudo guardar resultado.json: {exc}")
@@ -526,10 +746,28 @@ def run_review(development_run, reevaluation_run, project_root=PROJECT, *, progr
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--development-run", required=True, type=Path)
-    parser.add_argument("--reevaluation-run", required=True, type=Path)
+    parser.add_argument("--development-run", type=Path)
+    parser.add_argument("--reevaluation-run", type=Path)
+    parser.add_argument("--orchestration-run", type=Path)
+    parser.add_argument("--attempt", type=int, choices=(1, 2))
+    parser.add_argument("--operation-id", help="Identidad exclusiva del nuevo registro; no admite repetición")
+    parser.add_argument("--review-timeout", type=int, help="Solo revisión aislada: 60–600 segundos; predeterminado 180")
     args = parser.parse_args(argv)
-    result = run_review(args.development_run, args.reevaluation_run, PROJECT, progress=cli_progress)
+    isolated = any(v is not None for v in (args.orchestration_run, args.attempt, args.operation_id, args.review_timeout))
+    if isolated:
+        if (args.development_run is not None or args.reevaluation_run is not None
+                or args.orchestration_run is None or args.attempt is None or args.operation_id is None):
+            parser.error("Use --orchestration-run, --attempt y --operation-id juntos, sin argumentos históricos")
+        try:
+            result = run_isolated_review(args.orchestration_run, args.attempt, args.operation_id, PROJECT,
+                                         review_timeout=180 if args.review_timeout is None else args.review_timeout,
+                                         progress=cli_progress)
+        except ValueError as exc:
+            parser.error(str(exc))
+    else:
+        if args.development_run is None or args.reevaluation_run is None:
+            parser.error("La vía histórica requiere --development-run y --reevaluation-run")
+        result = run_review(args.development_run, args.reevaluation_run, PROJECT, progress=cli_progress)
     if result["error"]:
         cli_progress("Detenido: " + result["error"])
     print(f"Decisión del controlador: {result['decision_controlador']}; código: {result['codigo_salida']}")

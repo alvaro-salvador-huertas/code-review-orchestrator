@@ -155,6 +155,37 @@ No fue una aprobación emitida por el controlador ni demuestra un ciclo automát
 completo de esta tarea. La [secuencia y sus límites](evals/tareas_reales/inspect_json/revision.md)
 conservan los dictámenes históricos y distinguen las correcciones asistidas.
 
+El nuevo [flujo acotado de proyectos](docs/orquestacion-proyectos.md) conecta
+desarrollo, evaluación, revisión y una posible corrección para `inspect-json`:
+
+```bash
+python3 -B orchestrate_project.py inspect-json --max-attempts 2
+```
+
+El flujo se comprobó inicialmente con agentes simulados y reproduce la base
+conocida del contrato 003,
+aunque `main` ya tenga JSON. Cada candidato debe superar aceptación revisada,
+regresión de la base y comprobaciones públicas de booleanos, duración grande y
+anidamiento. Una aprobación lo deja listo para revisión humana; no lo incorpora.
+Permite como máximo dos llamadas por rol, con reservas persistentes y sin
+reintentos técnicos. Conserva la validación histórica de `review_project.py` y
+añade una vía explícita para entregas nuevas. Sus registros requieren un lector
+JSON general: el esquema y el inspector integrado permanecen iguales.
+La [primera ejecución real](evals/tareas_reales/inspect_json/orquestacion-real-2026-10-18.md)
+acreditó una corrección automática tras pruebas fallidas y se detuvo por timeout
+del revisor, código 4, sin dictamen final ni incorporación.
+
+También se puede solicitar una [revisión aislada de un intento
+terminado](docs/orquestacion-proyectos.md#revisión-aislada-de-una-entrega-terminada)
+con `review_project.py --orchestration-run ... --attempt 2 --operation-id ...`.
+Usa registro propio y una única reserva del revisor; no repite desarrollos ni
+evaluaciones, no reanuda el origen y no incorpora entregas. `--review-timeout`
+admite 60–600 segundos y conserva 180 por defecto. La guía documenta la revisión
+adicional de la segunda entrega real con 300 segundos: solicitó cambios y el
+[contraste automático asistido](evals/tareas_reales/inspect_json/orquestacion-real-2026-10-18.md#revisión-adicional-y-contraste-de-sus-hallazgos)
+confirmó dos defectos. La entrega experimental sigue sin incorporar; el inspector
+ya integrado permanece intacto. El resultado original continúa siendo código 4.
+
 Extracto de la consulta histórica del caso 01, conservado de la documentación
 anterior; no es una nueva ejecución:
 
@@ -205,6 +236,19 @@ Se conserva ese resultado ya obtenido; este ajuste documental no repite la suite
 Las pruebas nuevas consultan los ejemplos sin ejecutar sus referencias. Los
 informes sintéticos de los ejemplos no acreditan pruebas realmente ejecutadas
 ni se suman a estos recuentos. Esta validación local es distinta de la CI remota.
+
+El **18 de octubre de 2026**, la regresión completa del nuevo flujo de proyectos
+superó **262 métodos en 132,736 segundos, código 0**: los 242 anteriores y 20
+escenarios nuevos con agentes simulados. También se comprobó una corrección
+sobre la base real congelada y los evaluadores públicos, con dos desarrollos y
+una revisión simulados, sin modelos reales ni incorporación de candidatos.
+La [guía del flujo](docs/orquestacion-proyectos.md) detalla evidencia, consumos
+y limitaciones; no cambia los resultados históricos anteriores.
+
+Al añadir la revisión aislada pasaron **281 métodos** de regresión local. Tras
+el último refuerzo del validador pasaron **19 métodos enfocados**; la regresión
+completa anterior no se atribuye a ese cambio posterior. Son comprobaciones
+con agentes simulados, separadas del experimento real descrito en el informe.
 
 El descubrimiento se limita a `tests/`: los originales de `benchmark/` contienen
 defectos intencionados y no tienen que superar CI. La suite sigue evaluando sus

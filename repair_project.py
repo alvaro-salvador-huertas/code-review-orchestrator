@@ -246,7 +246,7 @@ def build_prompt(contract, initial_dir):
     return text.encode("utf-8")
 
 
-def develop(workspace, log, prompt, result, progress, save):
+def develop(workspace, log, prompt, result, progress, save, *, on_invoke=None):
     log.mkdir()
     (log / "entrada.txt").write_bytes(prompt)
     agent = result["agente"]
@@ -272,6 +272,8 @@ def develop(workspace, log, prompt, result, progress, save):
                "--output-last-message", str(log / "respuesta_final.txt"), "-"]
     result["reserva_invocacion"] = True
     save()  # Si falla la reserva no se intenta exec.
+    if on_invoke is not None:
+        on_invoke()
     if progress:
         progress("Desarrollo 1/1: iniciando Codex sobre la copia del proyecto.")
     agent["invocaciones"] = 1
