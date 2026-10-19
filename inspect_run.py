@@ -1,10 +1,12 @@
 """Consulta un registro general del orquestador sin ejecutar sus materiales."""
 
 import argparse
+from contextlib import nullcontext
 import json
 import math
 from pathlib import Path
 import sys
+import warnings
 
 sys.dont_write_bytecode = True
 
@@ -174,8 +176,14 @@ def test_summary(repair, phase, directory, issues, *, json_mode=False):
         return prefix + f"; incompleto; recuentos: {UNKNOWN}" if not json_mode else None
     try:
         text = report.decode("utf-8")
-        classification = classify_test_report(reference, text, code)
-        summary, failed, errors = test_report_rows(reference, text)
+        with warnings.catch_warnings() if json_mode else nullcontext():
+            if json_mode:
+                # El AST puede avisar sobre código válido. JSON exige stderr
+                # vacío; limitar los filtros a esta lectura, sin ocultar errores.
+                warnings.simplefilter("ignore", SyntaxWarning)
+                warnings.simplefilter("ignore", DeprecationWarning)
+            classification = classify_test_report(reference, text, code)
+            summary, failed, errors = test_report_rows(reference, text)
         total = int(summary.group(1))
         if errors:
             # El lector compartido comprueba las filas; aquí exigimos también

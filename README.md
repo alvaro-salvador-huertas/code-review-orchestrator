@@ -142,6 +142,12 @@ código 0. Los valores desconocidos se conservan como `null`. Los argumentos
 inválidos devuelven 2, stdout vacío y diagnóstico en stderr. Omitir `--format`
 o usar `--format text` mantiene la presentación textual anterior.
 
+Las advertencias del análisis AST de referencias válidas (por ejemplo, el escape
+`"\d"`) se filtran temporalmente al comprobar informes en JSON. No alteran los
+datos ni convierten la consulta en incompleta. Los errores reales de lectura o
+sintaxis siguen generando incidencias y código 1. Texto conserva sus advertencias;
+los filtros se restauran al salir del ámbito, también ante una excepción.
+
 La [tarea inspect-json](evals/tareas_reales/inspect_json/README.md) comenzó con un
 desarrollo mediante el adaptador sobre una copia. Su rechazo inicial se conserva:
 la [reevaluación](evals/tareas_reales/inspect_json/reevaluacion-2026-10-17.md) ajustó
@@ -249,6 +255,43 @@ Al añadir la revisión aislada pasaron **281 métodos** de regresión local. Tr
 el último refuerzo del validador pasaron **19 métodos enfocados**; la regresión
 completa anterior no se atribuye a ese cambio posterior. Son comprobaciones
 con agentes simulados, separadas del experimento real descrito en el informe.
+
+El **19 de octubre de 2026**, con **Python 3.12.3**, se reprodujo la fuga de
+advertencias AST a stderr del inspector publicado. Base:
+`c8a38c9bfb7d8105371567d8b7a6854d1f048d33`; SHA-256 inicial de `inspect_run.py`:
+`8abca5003639de7ddbed2c5f242c60d2a030be2548538b5f2a0b1507e78e7b87`.
+La nueva prueba permanente se ejecutó **antes de corregir el inspector**:
+
+```bash
+python3 -B -m unittest discover -s tests -p test_inspect_json.py -k test_json_escape_no_reconocido -v
+```
+
+Resultado inicial: **1 prueba, 1 fallo, código 1 del unittest**. La CLI hija
+devolvió código 0, consulta completada y el mismo objeto JSON que el control,
+pero la aserción de stderr vacío falló por `SyntaxWarning`. El fixture añadió
+`patron = "\d"` mediante bytes crudos a referencias sintéticas, sin ejecutar su
+contenido ni forzar filtros de advertencias en el proceso hijo. Los inventarios
+de contenido y metadatos permanecieron intactos. Es una reproducción local con
+3.12.3, distinta de la reproducción previa comunicada con 3.12.14.
+
+Tras la corrección, **62 pruebas enfocadas superadas en 4,400 s, código 0**:
+
+```bash
+python3 -B -m unittest discover -s tests -p 'test_inspect*.py' -v
+```
+
+Los cinco métodos nuevos cubren control y escape no reconocido por CLI,
+sintaxis inválida con incidencia localizada y código 1, texto predeterminado,
+`--format text`, `inspect_run(run_dir)` y restauración de filtros con políticas
+`always`, `error` e `ignore`. Un fallo inesperado inyectado en el analizador se
+propaga y también restaura los filtros. No se modifica `case_evidence.py`, los
+evaluadores históricos ni las autoridades congeladas del experimento rechazado.
+
+La regresión completa posterior (`python3 -B -m unittest discover -s tests -v`)
+superó **286 métodos en 145,628 s, código 0**, sin fallos ni errores. Incluye
+booleanos frente a números, enteros grandes y comparación anidada. Son pruebas
+locales con agentes simulados, sin nuevas ejecuciones reales ni reanudación del
+experimento; no se atribuyen a una ejecución remota de CI.
 
 El descubrimiento se limita a `tests/`: los originales de `benchmark/` contienen
 defectos intencionados y no tienen que superar CI. La suite sigue evaluando sus
