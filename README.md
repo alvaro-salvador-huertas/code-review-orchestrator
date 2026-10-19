@@ -300,6 +300,19 @@ La [guía](evals/tareas_reales/booking_core/README.md#incorporación-local-y-uso
 incluye un ejemplo con conflicto, hashes y evidencia. No añade HTTP, persistencia
 ni dependencias, y este recorrido no establece fiabilidad general.
 
+Está preparada la [tarea 007 booking-http](evals/tareas_reales/booking_http/README.md)
+para una futura API HTTP local, mediante v2 con un único editable inicialmente
+ausente: `booking_http.py`. Núcleo, CLI y contratos anteriores quedan protegidos.
+No se ha implementado el servidor ni se han invocado agentes. Se congeló la base
+`d6e576d…` y se inventariaron sus 530 pruebas sin ejecutarlas. La aceptación inicial
+registra 29 aserciones por archivo ausente; los controles obtuvieron 34 métodos
+correctos y un error del fixture de transporte porque el entorno deniega sockets.
+El usuario comunicó posteriormente un fixture correcto desde su terminal; no se
+suma a los anteriores como una nueva batería conjunta. La guía documenta además
+la cobertura del plazo total con fragmentos, las trazas corregidas y los controles
+de transporte pendientes en un entorno con loopback. El comando del orquestador
+sigue sin ejecutar y el desarrollador conserva `network_access=false`.
+
 El flujo `inspect-json` se comprobó inicialmente con agentes simulados y reproduce la base
 conocida del contrato 003,
 aunque `main` ya tenga JSON. Cada candidato debe superar aceptación revisada,
