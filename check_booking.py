@@ -1,20 +1,13 @@
 """Consulta local de disponibilidad de reservas (contrato 005)."""
 
-import datetime
 import json
-import re
 import sys
+
+import booking_core
+from booking_core import InvalidInput
 
 
 USAGE = "Uso: python3 -B check_booking.py [-h | --help] [--] archivo"
-TIMESTAMP = re.compile(
-    r"([0-9]{4})-([0-9]{2})-([0-9]{2})T"
-    r"([0-9]{2}):([0-9]{2}):([0-9]{2})Z"
-)
-
-
-class InvalidInput(ValueError):
-    """El documento no cumple el contrato de entrada."""
 
 
 def unique_object(pairs):
@@ -31,67 +24,9 @@ def reject_constant(value):
     raise InvalidInput(f"constante JSON no permitida: {value}")
 
 
-def require_object(value, keys, location):
-    if not isinstance(value, dict):
-        raise InvalidInput(f"{location}: debe ser un objeto")
-    if set(value) != set(keys):
-        raise InvalidInput(
-            f"{location}: claves obligatorias y exclusivas: {', '.join(keys)}"
-        )
-
-
-def parse_timestamp(value, location):
-    match = TIMESTAMP.fullmatch(value)
-    if match is None:
-        raise InvalidInput(f"{location}: formato requerido YYYY-MM-DDTHH:MM:SSZ")
-    try:
-        return datetime.datetime(*(int(part) for part in match.groups()))
-    except ValueError as exc:
-        raise InvalidInput(f"{location}: fecha u hora invalida ({exc})") from exc
-
-
-def validate_interval(value, location, reservation=False):
-    keys = ("id", "recurso", "inicio", "fin") if reservation else (
-        "recurso", "inicio", "fin"
-    )
-    require_object(value, keys, location)
-    for key in keys:
-        if not isinstance(value[key], str):
-            raise InvalidInput(f"{location}.{key}: debe ser una cadena")
-        if key in ("id", "recurso") and not any(
-            not character.isspace() for character in value[key]
-        ):
-            raise InvalidInput(f"{location}.{key}: debe contener un caracter no blanco")
-    start = parse_timestamp(value["inicio"], f"{location}.inicio")
-    end = parse_timestamp(value["fin"], f"{location}.fin")
-    if end <= start:
-        raise InvalidInput(f"{location}: fin debe ser posterior a inicio")
-    return start, end
-
-
 def check_booking(document):
-    """Valida todo el documento y devuelve los conflictos en orden de entrada."""
-    require_object(document, ("solicitud", "reservas"), "raiz")
-    request = document["solicitud"]
-    request_start, request_end = validate_interval(request, "solicitud")
-    reservations = document["reservas"]
-    if not isinstance(reservations, list):
-        raise InvalidInput("reservas: debe ser una lista")
-
-    identifiers = set()
-    conflicts = []
-    for index, reservation in enumerate(reservations):
-        location = f"reservas[{index}]"
-        start, end = validate_interval(reservation, location, reservation=True)
-        identifier = reservation["id"]
-        if identifier in identifiers:
-            raise InvalidInput(f"{location}.id: identificador duplicado {identifier!a}")
-        identifiers.add(identifier)
-        if (reservation["recurso"] == request["recurso"]
-                and start < request_end and end > request_start):
-            conflicts.append(identifier)
-
-    return {"disponible": not conflicts, "conflictos": conflicts}
+    """Conserva el nombre importable y delega las reglas en booking_core."""
+    return booking_core.check_booking(document)
 
 
 def parse_arguments(arguments):

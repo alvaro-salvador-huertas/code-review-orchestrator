@@ -272,6 +272,34 @@ recorrió después esa vía configurable real en dos intentos, con tres invocaci
 de cuatro disponibles. Su entrega `check_booking.py` se incorporó explícitamente
 tras contrastar el experimento, sin modificar el motor ni reanudar la ejecución.
 
+La [tarea 006 booking-core](evals/tareas_reales/booking_core/README.md) ya tiene
+su conjunto exacto incorporado localmente: `booking_core.py` reúne el dominio y
+`check_booking.py` conserva la CLI y delega en él. El primer recorrido real v2
+tuvo un desarrollo y una revisión, aprobación sin hallazgos y un único intento
+(2/4 invocaciones). Tras el [contraste automático asistido por Codex](evals/tareas_reales/booking_core/contraste-real-2026-10-19.md)
+se autorizó esta incorporación explícita, sin cambiar los registros históricos.
+
+La API Python recibe el documento ya decodificado. Ejemplo sintético:
+
+```python
+from booking_core import check_booking
+
+documento = {
+    "solicitud": {"recurso": "Sala Norte", "inicio": "2026-10-20T10:00:00Z",
+                  "fin": "2026-10-20T11:00:00Z"},
+    "reservas": [],
+}
+resultado = check_booking(documento)
+# {"disponible": True, "conflictos": []}
+```
+
+Las entradas inválidas lanzan `booking_core.InvalidInput`, subclase de
+`ValueError`. La función no modifica la entrada ni comparte resultados mutables;
+la CLI mantiene `python3 -B check_booking.py solicitud.json` y los códigos 0/1/2.
+La [guía](evals/tareas_reales/booking_core/README.md#incorporación-local-y-uso)
+incluye un ejemplo con conflicto, hashes y evidencia. No añade HTTP, persistencia
+ni dependencias, y este recorrido no establece fiabilidad general.
+
 El flujo `inspect-json` se comprobó inicialmente con agentes simulados y reproduce la base
 conocida del contrato 003,
 aunque `main` ya tenga JSON. Cada candidato debe superar aceptación revisada,
@@ -329,8 +357,12 @@ método aparece individualmente en unittest y el exportador no se importa en el
 proceso de pruebas. La [aceptación check-booking](tests/test_check_booking.py) y los
 [controles de su evaluador](tests/test_check_booking_evaluator.py) siguen el mismo
 patrón, con CLI hija y respuestas prefijadas, respectivamente. No importan el
-producto ni ejecutan suites durante el descubrimiento. No necesita ejecutar otra
-vez esos evaluadores por separado. Codex se
+producto ni ejecutan suites durante el descubrimiento. La
+[aceptación booking-core](tests/test_booking_core.py) añade 38 métodos de CLI y
+API en procesos hijos, y los [controles del evaluador](tests/test_booking_core_evaluator.py)
+añaden 30 métodos con respuestas y módulos sintéticos. Mantienen las aserciones
+originales y resuelven el import del evaluador con un alias temporal, sin interferir
+con las otras tareas. No necesita ejecutar otra vez esos evaluadores por separado. Codex se
 simula con ejecutables temporales y parches; no se instala Codex, no se inicia
 sesión, no se usan credenciales personales ni se llama a modelos. La suite crea
 sus propios registros temporales y no depende de los registros locales de `runs/`.
@@ -340,6 +372,17 @@ Para ejecutar lo mismo localmente, desde la raíz del proyecto:
 ```bash
 python3 -B -m unittest discover -s tests -v
 ```
+
+La incorporación local de **booking-core**, el **19 de octubre de 2026**, quedó
+validada con **530 métodos correctos en 246,578 s, Python 3.12.3, código 0**,
+sin fallos, errores ni omisiones, en una única regresión completa. Se contrastaron
+las identidades: 462 existentes, 38 de aceptación y 30 controles. Antes pasaron
+30 controles enfocados en 0,958 s; la aceptación del producto no se repitió
+por separado. Los hashes y modos del conjunto se conservaron. La
+[guía de incorporación](evals/tareas_reales/booking_core/README.md#validación-permanente-de-la-incorporación)
+identifica la nueva evidencia local, separada de la preparación y del experimento.
+No se ha ejecutado CI remota para estos cambios. Las actualizaciones posteriores
+a esta validación son exclusivamente documentales.
 
 La validación local del 17 de octubre de 2026 ejecutó ese comando una vez sobre
 el árbol actual: **238 métodos superados**, incluidos 29 de la nueva cobertura
