@@ -243,13 +243,14 @@ python3 -B orchestrate_project.py inspect-json --max-attempts 2
 ```
 
 También hay una [selección declarativa de tareas](docs/tareas-configurables.md)
-para un único archivo Python editable, existente o inicialmente ausente:
+para un archivo Python editable en v1 o un conjunto explícito en v2,
+con archivos existentes o inicialmente ausentes:
 
 ```bash
 python3 -B orchestrate_project.py --task-config tasks/config/mi-tarea.json --max-attempts 2
 ```
 
-La configuración versionada declara base, contrato, editable, evaluador, prompts,
+La configuración versionada declara base, contrato, editables, evaluador, prompts,
 referencias y límites. Es material de confianza del usuario, se congela antes del
 desarrollo y no contiene comandos ni opciones de permisos. Reutiliza el mismo
 motor y conserva los comandos históricos. Su preparación requiere regresión
@@ -257,6 +258,14 @@ superada y fallos de aserción acreditados en aceptación. La validación inicia
 motor usó dos tareas sintéticas y agentes simulados; no incorpora candidatos
 automáticamente. El comando anterior invoca agentes
 reales si se ejecuta con Codex disponible.
+
+V2 identifica el conjunto completo por rutas, presencia, SHA-256 y modos, conserva
+la partida exacta entre intentos y entrega al revisor todos los módulos candidatos.
+La aceptación y regresión usan copias nuevas de la base protegida. Admite
+modificación y creación de archivos Python de la raíz, con biblioteca estándar;
+no añade borrados, paquetes locales, API ni incorporación automática. Las
+[pruebas y la traza v2](docs/tareas-configurables.md#validación-del-soporte-v2)
+usan exclusivamente agentes simulados.
 
 La [tarea 005 de disponibilidad de reservas](evals/tareas_reales/check_booking/README.md)
 recorrió después esa vía configurable real en dos intentos, con tres invocaciones
@@ -418,6 +427,15 @@ conserva los resultados enfocados anteriores, sus fallos de integración
 corregidos y la evidencia local separada. No se repitió la aceptación aparte ni
 hubo llamadas reales a agentes o ejecuciones de Actions; después solo cambió
 documentación.
+
+El soporte configurable **v2 de varios archivos**, preparado desde el merge
+`9877b9c…`, superó una única regresión local final de **462 métodos en 237,038 s,
+Python 3.12.3, código 0**, sin fallos, errores ni omisiones. Incluye 12 métodos
+nuevos con repositorios y CLI simulados, más dos casos nuevos del inspector.
+La [guía v2](docs/tareas-configurables.md#validación-del-soporte-v2) conserva la
+traza, las comprobaciones enfocadas y la procedencia. Se distingue de la CI del
+merge base (448 métodos en 292,176 s) y de los experimentos históricos; no hubo
+llamadas reales a agentes, incorporación de candidatos ni CI de esta nueva rama.
 
 El descubrimiento se limita a `tests/`: los originales de `benchmark/` contienen
 defectos intencionados y no tienen que superar CI. La suite sigue evaluando sus

@@ -22,12 +22,15 @@ Admite estas parejas exactas de campos del resumen general emitido por
 | `inspect-json` | `orquestacion_inspect_json_v1` |
 | `export-csv` | `orquestacion_export_csv_v1` |
 
-También admite `orquestacion_configurable_v1` de la
+También admite `orquestacion_configurable_v1` y `orquestacion_configurable_v2` de la
 [vía de tareas declarativas](tareas-configurables.md). En ese formato, `tarea`
 debe ser un identificador no reservado y `configuracion` debe registrar versión
-entera 1, identificador igual a `tarea`, origen no vacío, SHA-256 de 64 caracteres
+entera 1 o 2 respectivamente, identificador igual a `tarea`, origen no vacío, SHA-256 de 64 caracteres
 hexadecimales y commit base de 40. Solo valida su estructura: no abre el origen
-ni verifica esos hashes. Los formatos históricos conservan sus parejas exactas.
+ni verifica esos hashes. Los manifiestos de conjuntos v2 y sus archivos siguen
+fuera del alcance de la consulta: no abre las rutas ni recalcula identidades.
+La proyección de exportación sigue siendo JSON v1, con `ejecucion.caso = tarea`
+y valores desconocidos `null`. Los formatos históricos conservan sus parejas exactas.
 
 Un registro del benchmark, un resumen de intento individual, una revisión
 aislada o cualquier otro formato produce una consulta incompleta. No se deduce

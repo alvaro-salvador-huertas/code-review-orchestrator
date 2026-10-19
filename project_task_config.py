@@ -11,6 +11,12 @@ from process_environment import process_environment
 
 
 TYPE = "orquestacion_configurable_v1"
+MULTIPLE = "orquestacion_configurable_v2"
+# Infraestructura que la selección de confianza nunca puede hacer editable.
+PROTECTED = {"orchestrate_project.py", "project_flow.py", "project_flow_runner.py",
+             "project_task_config.py", "project_delivery.py", "project_test_inventory.py",
+             "repair_project.py", "review_project.py", "review_case.py", "repair_case.py",
+             "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py"}
 RESERVED = {"inspect-json", "export-csv"}
 LIMITS = {"desarrollador": 600, "revisor": 600, "aceptacion": 300,
           "regresion": 600, "inventario": 120, "consulta_cli": 10}
@@ -57,9 +63,12 @@ def read_material(root, name):
 
 
 def validate_document(document):
-    fields(document, ("version", "identificador", "commit_base", "contrato", "archivo_editable",
-                      "estado_inicial", "evaluador_aceptacion", "prompts", "referencias", "limites_segundos"), "configuración")
-    require(type(document["version"]) is int and document["version"] == 1, "Versión no admitida")
+    require(type(document) is dict and type(document.get("version")) is int
+            and document["version"] in (1, 2), "Versión no admitida")
+    multiple = document["version"] == 2
+    fields(document, ("version", "identificador", "commit_base", "contrato",
+                      *(('archivos_editables',) if multiple else ('archivo_editable', 'estado_inicial')),
+                      "evaluador_aceptacion", "prompts", "referencias", "limites_segundos"), "configuración")
     task = document["identificador"]
     require(type(task) is str and re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", task)
             and len(task) <= 64 and task not in RESERVED, "Identificador inválido o reservado")
@@ -67,10 +76,19 @@ def validate_document(document):
             "Se requiere un commit base completo")
     relative_path(document["contrato"], prefix="tasks", suffix=".md")
     relative_path(document["evaluador_aceptacion"], prefix="evals", suffix=".py")
-    editable = relative_path(document["archivo_editable"], suffix=".py")
-    require(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.py", editable),
-            "Esta versión admite un archivo Python en la raíz del proyecto")
-    require(document["estado_inicial"] in ("existente", "ausente"), "Estado inicial inválido")
+    entries = (document["archivos_editables"] if multiple else
+               [{"ruta": document["archivo_editable"], "estado_inicial": document["estado_inicial"]}])
+    require(type(entries) is list and entries, "Se requiere una lista no vacía de editables")
+    editables = []
+    for entry in entries:
+        fields(entry, ("ruta", "estado_inicial"), "archivo editable")
+        editable = relative_path(entry["ruta"], suffix=".py")
+        require(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.py", editable),
+                "Solo se admiten archivos Python en la raíz del proyecto")
+        require(entry["estado_inicial"] in ("existente", "ausente"), "Estado inicial inválido")
+        require(not multiple or editable not in PROTECTED, "Editable colisiona con infraestructura protegida")
+        editables.append(editable)
+    require(len(set(editables)) == len(editables), "Editables duplicados")
     fields(document["prompts"], ("desarrollador", "revisor"), "prompts")
     for value in document["prompts"].values():
         relative_path(value, prefix="prompts", suffix=".md")
@@ -79,7 +97,7 @@ def validate_document(document):
     for name in references:
         relative_path(name)
     materials = [document["contrato"], document["evaluador_aceptacion"], *document["prompts"].values(), *references]
-    require(len(set(materials)) == len(materials) and editable not in materials,
+    require(len(set(materials)) == len(materials) and not set(editables).intersection(materials),
             "Materiales duplicados o archivo editable entre autoridades")
     fields(document["limites_segundos"], LIMITS, "límites")
     for name, maximum in LIMITS.items():
@@ -110,7 +128,30 @@ def load_task(root, path):
     matches = re.findall(rb"(?m)^Base: `([0-9a-f]{40})`\s*$", materials[document["contrato"]])
     require(matches == [base.encode()], "El contrato debe declarar exactamente la misma base")
     require(git(root, "rev-parse", base + "^{commit}").decode().strip() == base, "Base local no disponible")
-    editable = document["archivo_editable"]
+    multiple = document["version"] == 2
+    declarations = (document["archivos_editables"] if multiple else
+                    [{"ruta": document["archivo_editable"], "estado_inicial": document["estado_inicial"]}])
+    initials = {}
+    for declaration in declarations:
+        editable = declaration["ruta"]
+        initial = git_initial(root, base, editable)
+        require((initial["tipo"] == "ausente") == (declaration["estado_inicial"] == "ausente"),
+                f"Estado inicial distinto de la base Git: {editable}")
+        initials[editable] = initial
+    config = {"tipo": MULTIPLE if multiple else TYPE, "tarea": document["identificador"], "base": base,
+              "contrato": document["contrato"], "esquema": None,
+              "desarrollo": document["prompts"]["desarrollador"], "revision": document["prompts"]["revisor"],
+              "suites": {"aceptacion": document["evaluador_aceptacion"], "regresion": None},
+              "limites": document["limites_segundos"], "referencias": document["referencias"],
+              "configurable": True, "origen_configuracion": name, "configuracion_sha256": digest(raw)}
+    if multiple:
+        config.update(multiples=True, editables=sorted(initials), editables_iniciales=initials)
+    else:
+        config.update(editable=editable, ausente=initial["tipo"] == "ausente", editable_inicial=initial)
+    return ConfiguredTask(config, document, raw, materials)
+
+
+def git_initial(root, base, editable):
     entries = git(root, "ls-tree", "-z", base, "--", editable).split(b"\0")
     entry = entries[0]
     initial = {"tipo": "ausente", "sha256": None, "modo": None}
@@ -120,13 +161,4 @@ def load_task(root, path):
         require(found.decode() == editable and kind == "blob" and mode in ("100644", "100755"),
                 "Editable inicial no regular")
         initial = {"tipo": "archivo", "sha256": digest(git(root, "cat-file", "blob", oid)), "modo": int(mode[-3:], 8)}
-    absent = document["estado_inicial"] == "ausente"
-    require((initial["tipo"] == "ausente") == absent, "Estado inicial distinto de la base Git")
-    config = {"tipo": TYPE, "tarea": document["identificador"], "base": base,
-              "contrato": document["contrato"], "editable": editable, "ausente": absent, "esquema": None,
-              "desarrollo": document["prompts"]["desarrollador"], "revision": document["prompts"]["revisor"],
-              "suites": {"aceptacion": document["evaluador_aceptacion"], "regresion": None},
-              "limites": document["limites_segundos"], "referencias": document["referencias"],
-              "configurable": True, "origen_configuracion": name, "configuracion_sha256": digest(raw),
-              "editable_inicial": initial}
-    return ConfiguredTask(config, document, raw, materials)
+    return initial

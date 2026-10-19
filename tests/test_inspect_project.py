@@ -460,6 +460,35 @@ class TestInspectProject(unittest.TestCase):
                 data["tarea"] = data["configuracion"]["identificador"] = task
                 self.query(data, code=1)
 
+    def test_configurable_v2_failed_summary_and_incomplete_export(self):
+        data = self.configurable_summary()
+        data.update(tipo="orquestacion_configurable_v2", estado="tiempo_agotado", codigo_salida=4,
+                    lista_para_revision_humana=False)
+        data["configuracion"]["version"] = 2
+        data["intentos"][0]["conjunto"] = {"ruta_registrada": "/no/abrir/entrega.json"}
+        for incomplete in (False, True):
+            with self.subTest(incomplete=incomplete):
+                if incomplete:
+                    del data["duracion_segundos"]
+                document = self.query(data, code=int(incomplete))
+                self.assertEqual(document["ejecucion"]["codigo_salida"], 4)
+                query = self.cli("inspect_project.py", "--run", self.run, "--format", "json")
+                path = self.run / "consulta.json"
+                path.write_bytes(query.stdout)
+                exported = self.cli("export_runs.py", path)
+                self.assertEqual((exported.returncode, exported.stderr), (0, b""))
+                self.assertIn(b'"tarea-sintetica"', exported.stdout)
+                if incomplete:
+                    self.assertIsNone(document["ejecucion"]["duracion_segundos"])
+
+    def test_configurable_v2_requires_matching_metadata_version(self):
+        for version in (1, True, 2.0, None, 3):
+            with self.subTest(version=version):
+                data = self.configurable_summary()
+                data["tipo"] = "orquestacion_configurable_v2"
+                data["configuracion"]["version"] = version
+                self.query(data, code=1)
+
 
 if __name__ == "__main__":
     unittest.main()
