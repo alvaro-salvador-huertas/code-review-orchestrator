@@ -24,7 +24,7 @@ def atomic_json(path, data):
     temporary.replace(path)
 
 
-def feedback_from(delivery, record, review=None):
+def feedback_from(delivery, record, review=None, *, task=None):
     """Datos trazables; los hallazgos del modelo no son hechos acreditados."""
     feedback = {"candidato_sha256": record["candidato_sha256"], "pruebas": {}, "revision": None}
     for kind, item in record["evaluaciones"].items():
@@ -36,7 +36,7 @@ def feedback_from(delivery, record, review=None):
                 "informe": parse_json(diagnostics["pruebas.json"]),
                 "diagnosticos": diagnostics["stderr.txt"].decode(errors="replace")}
     if review:
-        editable = task_config(record["tarea"])["editable"]
+        editable = task_config(task if task is not None else record["tarea"])["editable"]
         path = Path(review["registro"])
         verdict = validate_verdict(required(path / "revisor/respuesta_original.txt"),
                                    len(required(delivery / "entrega" / editable).splitlines()), editable=editable)
@@ -50,9 +50,19 @@ def feedback_from(delivery, record, review=None):
     return feedback
 
 
-def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, progress=None):
+def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None, task_config_path=None):
     root = Path(root).resolve()
-    config = task_config(task if task in TASKS else "inspect-json")
+    if task_config_path is not None:
+        from project_task_config import load_task
+        require(task is None, "No combinar tarea posicional con --task-config")
+        selection = load_task(root, task_config_path)
+        config = task_config(selection)
+        task = config["tarea"]
+    else:
+        task = "inspect-json" if task is None else task
+        selection = task
+        config = task_config(task if task in TASKS else "inspect-json")
+    generic = config.get("configurable", False)
     editable, limits = config["editable"], config["limites"]
     started = time.monotonic()
     result = {"tipo": config["tipo"], "tarea": task, "registro": None, "inicio_utc": timestamp(),
@@ -62,6 +72,10 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
               "reservas": [], "intentos": [], "inicial": {}, "integridad": {},
               "limites_segundos": dict(limits), "etapas_cerradas": {},
               "lista_para_revision_humana": False, "incorporacion": "no_realizada", "error": None}
+    if generic:
+        result["configuracion"] = {"version": 1, "identificador": task,
+            "origen": config["origen_configuracion"], "sha256": config["configuracion_sha256"],
+            "commit_base": config["base"]}
     log = frozen = None
     original_state = reference_state = None
 
@@ -107,7 +121,7 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
         seal(directory)  # También persiste los contadores antes del proceso.
 
     try:
-        require(task in TASKS, "Tarea de proyecto desconocida")
+        require(generic or task in TASKS, "Tarea de proyecto desconocida")
         require(type(max_attempts) is int and max_attempts in (1, 2), "Solo uno o dos intentos")
         original_state = tree_state(root, filter_local=True)
         parent = Path(tempfile.gettempdir()).resolve()
@@ -121,8 +135,10 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
         save()
         notify(f"Congelando base de {config['contrato']}, autoridades, prompts y configuración del flujo.")
         frozen = log / "referencia"
-        result["procedencia"] = freeze_flow(root, frozen, max_attempts, task)
+        result["procedencia"] = freeze_flow(root, frozen, max_attempts, selection)
         reference_state = tree_state(frozen)
+        if generic:
+            selection.reference_state = reference_state
         result.update(referencia_sha256=reference_state, original_sha256=original_state)
         expected = result["procedencia"]["pruebas_esperadas"]
         with tempfile.TemporaryDirectory(prefix="orchestrate-project-", dir=parent) as temporary:
@@ -130,13 +146,14 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
             initial = temporary / "inicial"
             shutil.copytree(frozen / "proyecto", initial)
             evaluate_flow(initial, frozen, log / "inicial", expected, result["inicial"], progress, check, seal,
-                          kinds=("aceptacion", "regresion"), task=task)
+                          kinds=("aceptacion", "regresion"), task=selection)
             seal(log / "inicial")
             if not preparation_authorized(result["inicial"], required(log / "inicial/aceptacion/stderr.txt"), config):
                 raise StopProject(7, "preparacion_no_autoriza", "Regresión o precondición inicial no acreditadas")
-            if config["ausente"]:
+            if config["ausente"] or generic:
                 require(validate_inventory(frozen, config, result["procedencia"]) == expected["regresion"],
                         "Inventario esperado alterado")
+            if config["ausente"]:
                 require(editable not in tree_state(frozen / "proyecto"), "El editable inicial debe estar ausente")
             starting = None if config["ausente"] else required(frozen / "proyecto" / editable)
             feedback, previous = None, None
@@ -168,6 +185,10 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
                 prompt = required(frozen / config["desarrollo"]) + b"\n\nCONTRATO\n" + required(frozen / "contrato.md")
                 if config["esquema"]:
                     prompt += b"\n\nESQUEMA PROTEGIDO\n" + required(frozen / "autoridades" / config["esquema"])
+                if generic:
+                    prompt += b"\n\nCONFIGURACION CONGELADA\n" + required(frozen / "tarea.json")
+                    for name in config["referencias"]:
+                        prompt += b"\n\nREFERENCIA " + name.encode() + b"\n" + required(frozen / "materiales" / name)
                 if feedback is None:
                     feedback = {"inicial": result["inicial"], "diagnosticos":
                         required(log / "inicial/aceptacion/stderr.txt").decode(errors="replace"),
@@ -181,7 +202,7 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
                     develop(workspace, delivery / "desarrollo", prompt, record["desarrollo"], None,
                             lambda: atomic_json(delivery / "desarrollo_estado.json", record["desarrollo"]),
                             on_invoke=lambda: reserve("desarrollador", entry),
-                            **({"timeout": limits["desarrollador"]} if config["ausente"] else {}))
+                            **({"timeout": limits["desarrollador"]} if config["ausente"] or generic else {}))
                 finally:
                     after = tree_state(workspace)
                     changes = {n: {"antes": before.get(n), "despues": after.get(n)}
@@ -223,7 +244,7 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
                 save()
                 try:
                     evaluate_flow(posterior, frozen, delivery / "evaluaciones", expected, record["evaluaciones"],
-                                  progress, check, seal, task=task)
+                                  progress, check, seal, task=selection)
                 finally:
                     record["integridad"] = dict(result["integridad"])
                     record["etapas_sha256"] = {n: tree_state(delivery / n) for n in ("desarrollo", "entrega", "evaluaciones")}
@@ -231,7 +252,8 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
                     atomic_json(delivery / "resultado.json", record)
                     seal(delivery)
                 check()
-                validated, _ = validate_delivery(delivery, root, allow_failures=True)
+                validated, _ = validate_delivery(delivery, root, allow_failures=True,
+                                                  **({"task": selection} if generic else {}))
                 passed = all(item["clasificacion"] == "superadas" for item in validated["evaluaciones"].values())
                 reason = "fallos_asercion"
                 entry["transiciones"].append({"etapa": "evaluacion", "accion": "revisar" if passed else "corregir", "motivo": "superadas" if passed else reason})
@@ -241,7 +263,7 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
                     result["estado"] = "en_revision"
                     save()
                     review = run_delivery_review(delivery, root, progress=progress,
-                                                 on_invoke=lambda: reserve("revisor", entry), task=task)
+                                                 on_invoke=lambda: reserve("revisor", entry), task=selection)
                     entry["revision"] = review
                     if review["registro"]:
                         seal(Path(review["registro"]))
@@ -265,7 +287,7 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
                     entry["transiciones"].append({"etapa": "presupuesto", "accion": "detener", "motivo": "intentos_agotados"})
                     result.update(estado="intentos_agotados", motivo=reason, codigo_salida=1)
                     break
-                feedback = feedback_from(delivery, validated, review)
+                feedback = feedback_from(delivery, validated, review, task=selection)
                 previous, starting = delivery, candidate
                 check()
             check()
@@ -305,10 +327,19 @@ def run_orchestration(task="inspect-json", root=PROJECT, max_attempts=2, *, prog
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tarea", choices=TASKS)
+    parser.add_argument("tarea", choices=TASKS, nargs="?")
+    parser.add_argument("--task-config", action="append", help="Una configuración relativa bajo tasks/config/")
     parser.add_argument("--max-attempts", type=int, choices=(1, 2), default=2)
     args = parser.parse_args(argv)
-    result = run_orchestration(args.tarea, PROJECT, args.max_attempts, progress=cli_progress)
+    if (args.tarea is None) == (args.task_config is None):
+        parser.error("Seleccione una tarea posicional o --task-config, sin combinarlas")
+    if args.task_config is not None and len(args.task_config) != 1:
+        parser.error("Seleccione exactamente una configuración")
+    try:
+        result = run_orchestration(args.tarea, PROJECT, args.max_attempts, progress=cli_progress,
+                                   task_config_path=args.task_config[0] if args.task_config else None)
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        parser.error(f"Configuración inválida: {exc}")
     print(f"Estado: {result['estado']}; código: {result['codigo_salida']}")
     calls = result["invocaciones"]
     print(f"Intentos: {len(result['intentos'])}/{result['max_intentos']}; invocaciones: "

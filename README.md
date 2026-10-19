@@ -216,7 +216,23 @@ desarrollo, evaluación, revisión y una posible corrección para `inspect-json`
 python3 -B orchestrate_project.py inspect-json --max-attempts 2
 ```
 
-El flujo se comprobó inicialmente con agentes simulados y reproduce la base
+También hay una [selección declarativa de tareas](docs/tareas-configurables.md)
+para un único archivo Python editable, existente o inicialmente ausente:
+
+```bash
+python3 -B orchestrate_project.py --task-config tasks/config/mi-tarea.json --max-attempts 2
+```
+
+La configuración versionada declara base, contrato, editable, evaluador, prompts,
+referencias y límites. Es material de confianza del usuario, se congela antes del
+desarrollo y no contiene comandos ni opciones de permisos. Reutiliza el mismo
+motor y conserva los comandos históricos. Su preparación requiere regresión
+superada y fallos de aserción acreditados en aceptación. El hito se demuestra con
+dos tareas sintéticas y agentes simulados; no añade una tercera funcionalidad
+real ni incorpora candidatos automáticamente. El comando anterior invoca agentes
+reales si se ejecuta con Codex disponible.
+
+El flujo `inspect-json` se comprobó inicialmente con agentes simulados y reproduce la base
 conocida del contrato 003,
 aunque `main` ya tenga JSON. Cada candidato debe superar aceptación revisada,
 regresión de la base y comprobaciones públicas de booleanos, duración grande y
