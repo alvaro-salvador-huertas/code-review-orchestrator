@@ -246,7 +246,7 @@ def build_prompt(contract, initial_dir):
     return text.encode("utf-8")
 
 
-def develop(workspace, log, prompt, result, progress, save, *, on_invoke=None):
+def develop(workspace, log, prompt, result, progress, save, *, on_invoke=None, timeout=None):
     log.mkdir()
     (log / "entrada.txt").write_bytes(prompt)
     agent = result["agente"]
@@ -278,7 +278,7 @@ def develop(workspace, log, prompt, result, progress, save, *, on_invoke=None):
         progress("Desarrollo 1/1: iniciando Codex sobre la copia del proyecto.")
     agent["invocaciones"] = 1
     try:
-        agent["proceso"] = run_process(command, workspace, log, AGENT_TIMEOUT, prompt=prompt,
+        agent["proceso"] = run_process(command, workspace, log, AGENT_TIMEOUT if timeout is None else timeout, prompt=prompt,
                                        stdout_name="eventos.jsonl", env_policy="codex")
     except (ProcessInterrupted, ProcessRecordError) as exc:
         agent["proceso"] = exc.result

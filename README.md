@@ -148,6 +148,33 @@ datos ni convierten la consulta en incompleta. Los errores reales de lectura o
 sintaxis siguen generando incidencias y código 1. Texto conserva sus advertencias;
 los filtros se restauran al salir del ámbito, también ante una excepción.
 
+La [exportación CSV](evals/tareas_reales/export_csv/README.md) está incorporada
+localmente y usa solo biblioteca estándar:
+
+```bash
+python3 -B export_runs.py consulta_1.json consulta_2.json
+```
+
+Cada archivo debe contener un objeto completo del esquema JSON v1 del inspector.
+Conserva el orden, los argumentos repetidos y su texto literal en `origen`; los
+desconocidos producen celdas vacías, distintas de cero. Valida todas las entradas
+antes de escribir la cabecera y las filas CSV. No recibe directamente registros
+ni el JSON general del orquestador de proyectos, y no invoca el inspector.
+
+El código del exportador es **0** al completar el CSV, **1** ante entradas
+ilegibles o inválidas, y **2** ante argumentos incorrectos. Los errores no dejan
+CSV parcial. `-h` y `--help` muestran ayuda con código 0. Estos códigos son
+independientes de las columnas `consulta_codigo_salida` y
+`ejecucion_codigo_salida`: una consulta incompleta o ejecución fallida válida
+también puede exportarse con código 0.
+
+La entrega procede de un desarrollo y una revisión reales, con aprobación sin
+hallazgos. Después recibió un [contraste automático asistido por Codex](evals/tareas_reales/export_csv/contraste-real-2026-10-19.md)
+y autorización explícita para incorporar sus bytes exactos como archivo 0644.
+La [guía CSV](evals/tareas_reales/export_csv/README.md#incorporación-explícita-y-cobertura-permanente)
+conserva el SHA-256, procedencia y validación local, separados de las simulaciones
+previas. La incorporación no reanuda la orquestación ni modifica sus registros.
+
 La [tarea inspect-json](evals/tareas_reales/inspect_json/README.md) comenzó con un
 desarrollo mediante el adaptador sobre una copia. Su rechazo inicial se conserva:
 la [reevaluación](evals/tareas_reales/inspect_json/reevaluacion-2026-10-17.md) ajustó
@@ -216,8 +243,12 @@ revisión, orquestación, recorridos multicaso e inspección de registros. La
 [cobertura JSON permanente](tests/test_inspect_json.py) reutiliza aceptación,
 hallazgos y anidamiento con datos sintéticos: esquema, códigos y canales,
 desconocidos, valores inválidos, booleanos, enteros grandes y estructuras
-profundas, además de compatibilidad textual. No necesita ejecutar otra vez esos
-evaluadores por separado. Codex se
+profundas, además de compatibilidad textual. La [aceptación CSV permanente](tests/test_export_csv.py)
+añade los 17 métodos del evaluador por CLI y sus [controles permanentes](tests/test_export_csv_evaluator.py)
+añaden las 17 comprobaciones con respuestas prefijadas, incluida equivalencia
+decimal exacta. Los adaptadores heredan las aserciones sin duplicarlas: cada
+método aparece individualmente en unittest y el exportador no se importa en el
+proceso de pruebas. No necesita ejecutar otra vez esos evaluadores por separado. Codex se
 simula con ejecutables temporales y parches; no se instala Codex, no se inicia
 sesión, no se usan credenciales personales ni se llama a modelos. La suite crea
 sus propios registros temporales y no depende de los registros locales de `runs/`.
@@ -292,6 +323,17 @@ superó **286 métodos en 145,628 s, código 0**, sin fallos ni errores. Incluye
 booleanos frente a números, enteros grandes y comparación anidada. Son pruebas
 locales con agentes simulados, sin nuevas ejecuciones reales ni reanudación del
 experimento; no se atribuyen a una ejecución remota de CI.
+
+Tras incorporar explícitamente CSV el **19 de octubre de 2026**, se ejecutó
+una sola vez el descubrimiento completo con **Python 3.12.3**: **355 métodos
+correctos en 182,354 s, código 0**, sin fallos, errores ni omisiones. Incluye
+17 métodos de aceptación CSV y 17 controles del evaluador, cada uno descubierto
+una vez. No se repitió la aceptación por separado. Este resultado local del
+árbol incorporado se distingue de las 321 pruebas históricas de preparación y
+las 286 de la base congelada; no acredita una ejecución remota de Actions.
+La [guía CSV](evals/tareas_reales/export_csv/README.md#incorporación-explícita-y-cobertura-permanente)
+identifica la evidencia local. Los cambios posteriores a esta validación son
+exclusivamente documentales.
 
 El descubrimiento se limita a `tests/`: los originales de `benchmark/` contienen
 defectos intencionados y no tienen que superar CI. La suite sigue evaluando sus
