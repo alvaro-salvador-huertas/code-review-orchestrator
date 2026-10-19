@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import sys
 
 from case_evidence import read_regular
@@ -12,6 +13,7 @@ from case_evidence import read_regular
 TYPES = {"inspect-json": "orquestacion_inspect_json_v1",
          "export-csv": "orquestacion_export_csv_v1"}
 ACTIVE = {"en_preparacion", "en_desarrollo", "en_evaluacion", "en_revision"}
+CONFIGURABLE = "orquestacion_configurable_v1"
 
 
 class Number:
@@ -169,7 +171,23 @@ def read_inspection(run_dir):
     data = summary or {}
     if summary is not None:
         task = data["tarea"]
-        if task not in TYPES or data["tipo"] != TYPES[task]:
+        if data["tipo"] == CONFIGURABLE:
+            metadata = validate(document.get("configuracion"), {
+                "version": "integer", "identificador": "text", "origen": "text",
+                "sha256": "text", "commit_base": "text"}, "resultado.configuracion", issues)
+            summary["configuracion"] = metadata
+            if not (isinstance(task, str) and len(task) <= 64
+                    and re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", task) and task not in TYPES):
+                issues.append("resultado.tarea: identificador configurable inválido")
+            if metadata is not None:
+                if not isinstance(metadata["version"], Number) or metadata["version"].text != "1":
+                    issues.append("resultado.configuracion.version: versión no admitida")
+                if metadata["identificador"] != task:
+                    issues.append("resultado.configuracion.identificador: distinto de tarea")
+                for key, size in (("sha256", 64), ("commit_base", 40)):
+                    if not re.fullmatch(r"[0-9a-f]{" + str(size) + "}", metadata[key] or ""):
+                        issues.append(f"resultado.configuracion.{key}: formato inválido")
+        elif task not in TYPES or data["tipo"] != TYPES[task]:
             issues.append("resultado.tipo/tarea: formato de orquestación no admitido")
         if data["estado"] not in ACTIVE:
             for key in ("fin_utc", "duracion_segundos"):
@@ -255,6 +273,9 @@ def show_text(inspection, summary, emit=print):
     data, execution = summary or {}, inspection["ejecucion"]
     emit("Consulta del resumen de proyectos: solo resultado.json.")
     show_fields("Ejecución registrada", data, ("tarea", "estado", "motivo", "codigo_salida"), emit)
+    if data.get("tipo") == CONFIGURABLE:
+        show_fields("Configuración registrada (sin abrir ni verificar hashes)", data.get("configuracion"),
+                    ("version", "identificador", "origen", "sha256", "commit_base"), emit)
     emit("Intentos registrados: " + display(execution["intentos_registrados"]))
     show_fields("Presupuestos registrados", execution["presupuestos"], ("max_intentos", "max_invocaciones"), emit)
     show_fields("Invocaciones registradas", execution["invocaciones"], (*CALLS, "total"), emit)

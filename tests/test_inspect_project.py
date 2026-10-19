@@ -426,6 +426,40 @@ class TestInspectProject(unittest.TestCase):
                 self.assertEqual(doc["ejecucion"]["duracion_segundos"], token)
                 self.assertEqual(doc["ejecucion"]["presupuestos"]["max_invocaciones"], "9" * 5001)
 
+    def configurable_summary(self):
+        data = summary()
+        data.update(tipo="orquestacion_configurable_v1", tarea="tarea-sintetica",
+                    configuracion={"version": 1, "identificador": "tarea-sintetica",
+                        "origen": "/no/abrir/configuracion.json", "sha256": "a" * 64, "commit_base": "b" * 40})
+        return data
+
+    def test_configurable_summary_only_reads_result(self):
+        result = self.query(self.configurable_summary())
+        self.assertEqual(result["ejecucion"]["caso"], "tarea-sintetica")
+        text = self.cli("inspect_project.py", "--run", self.run)
+        self.assertEqual((text.returncode, text.stderr), (0, b""))
+        self.assertIn("Configuración registrada (sin abrir ni verificar hashes)", text.stdout.decode())
+        self.assertIn("/no/abrir/configuracion.json", text.stdout.decode())
+
+    def test_configurable_metadata_invalid_or_missing(self):
+        for key, value in (("version", True), ("version", 2), ("identificador", "otra-tarea"),
+                           ("sha256", None), ("commit_base", "main"), ("origen", [])):
+            with self.subTest(key=key):
+                data = self.configurable_summary()
+                data["configuracion"][key] = value
+                result = self.query(data, code=1)
+                self.assertEqual(result["ejecucion"]["caso"], "tarea-sintetica")
+        data = self.configurable_summary()
+        del data["configuracion"]
+        self.query(data, code=1)
+
+    def test_configurable_format_cannot_impersonate_historical_task(self):
+        for task in TASKS:
+            with self.subTest(task=task):
+                data = self.configurable_summary()
+                data["tarea"] = data["configuracion"]["identificador"] = task
+                self.query(data, code=1)
+
 
 if __name__ == "__main__":
     unittest.main()

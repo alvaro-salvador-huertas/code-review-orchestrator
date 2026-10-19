@@ -282,9 +282,9 @@ def validate_evidence(development_run, reevaluation_run, project_root=PROJECT):
         raise ValueError(f"Evidencia incompleta o inválida: {exc}") from exc
 
 
-def review_dependencies(sources, files, read_file):
+def review_dependencies(sources, files, read_file, *, editable="inspect_run.py"):
     """Cerrar imports estáticos del código y pruebas pertinentes, sin importarlos."""
-    pending, seen, dependencies = list(sources), {"inspect_run.py"}, {}
+    pending, seen, dependencies = list(sources), {editable}, {}
     while pending:
         for node in ast.walk(ast.parse(pending.pop())):
             require(not isinstance(node, ast.ImportFrom) or node.level == 0,
@@ -408,13 +408,17 @@ def run_delivery_review(delivery_run, project_root=PROJECT, *, progress=None, on
         require(on_invoke is not None, "La entrega nueva requiere una reserva del orquestador; no hay reanudación")
         on_invoke()
     def load():
-        evidence, authorization, sources = delivery_review_evidence(delivery_run, project_root)
+        evidence, authorization, sources = delivery_review_evidence(delivery_run, project_root,
+            **({"task": task} if config.get("configurable") else {}))
         require(authorization["tipo"] == config["tipo"], "Tarea de revisión distinta de la entrega")
         return evidence, authorization, sources
+    def select(evidence, authorization):
+        return delivery_review_materials(evidence, authorization,
+            **({"task": task} if config.get("configurable") else {}))
     return _run_review(load,
-                       delivery_review_materials, frozen / config["revision"], project_root,
-                       progress=progress, on_invoke=reserve, task=task, editable=config["editable"],
-                       review_timeout=config["limites"]["revisor"] if task == "export-csv" else None,
+                       select, frozen / config["revision"], project_root,
+                       progress=progress, on_invoke=reserve, task=config["tarea"], editable=config["editable"],
+                       review_timeout=config["limites"]["revisor"] if task == "export-csv" or config.get("configurable") else None,
                        preparation="Validando entrega nueva y sus evaluaciones completas.")
 
 
