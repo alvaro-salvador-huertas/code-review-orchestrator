@@ -21,7 +21,7 @@ incorpora al proyecto.
 1. Seleccionar un commit completo y disponible localmente como base de confianza.
    Debe contener una regresión no vacía bajo `tests/`, descubrible por `unittest`.
 2. Mantener un contrato bajo `tasks/`, con una única línea `Base: ` seguida del
-   SHA de 40 caracteres entre acentos graves. Declarar el único archivo editable.
+   SHA de 40 caracteres entre acentos graves. Declarar los archivos editables y sus estados iniciales.
 3. Preparar un evaluador de aceptación bajo `evals/`, con biblioteca estándar,
    que acepte `--project <copia>`, clases explícitas de `unittest.TestCase`, una
    sola ejecución de `TextTestRunner` y código 0/1 según su resultado. La lectura
@@ -30,7 +30,7 @@ incorpora al proyecto.
 4. Escribir prompts bajo `prompts/` y declarar las referencias necesarias. El
    revisor debe emitir `decision`, `resumen` y `hallazgos` según el esquema que
    recibe, con archivo y línea localizados. Su sesión es independiente.
-5. Guardar el JSON v1 bajo `tasks/config/`, revisar los materiales y ejecutar el
+5. Guardar el JSON v1 o v2 bajo `tasks/config/`, revisar los materiales y ejecutar el
    comando solo cuando se quiera autorizar una ejecución real.
 
 Configuración, contrato, evaluador, prompts, referencias y base son **materiales
@@ -143,7 +143,8 @@ nunca producen aprobación.
 
 ## Registros y consulta
 
-El nuevo tipo es `orquestacion_configurable_v1`. Su resumen incluye `tarea` y
+La configuración v1 produce `orquestacion_configurable_v1`; v2 produce
+`orquestacion_configurable_v2`. El resumen incluye `tarea` y
 `configuracion` con versión, identificador, origen, SHA-256 del JSON y commit base.
 Los tipos y validadores históricos no se sustituyen.
 
@@ -161,20 +162,22 @@ la revisión aislada histórica para aceptar este formato.
 
 ## Límites y validación
 
-Esta versión admite un archivo Python editable en la raíz, biblioteca estándar y
+V1 admite un archivo Python editable y v2 varios, todos en la raíz, con biblioteca estándar y
 materiales declarados. No incluye interpretación de lenguaje natural, planificación
 automática, instalación de paquetes, despliegue ni agentes nuevos.
 El cierre estático de dependencias del revisor conserva sus restricciones:
 módulos locales `.py` en la raíz o `tests/` y biblioteca estándar; los imports
 dinámicos, relativos, paquetes locales o dependencias ambiguas detienen la revisión.
 
-Para proyectos con varios archivos falta definir un conjunto editable, operaciones
-de creación/borrado, continuidad y diffs por archivo, cierre de dependencias,
-contexto del revisor y esquema de hallazgos. También queda pendiente una revisión
-aislada configurable con autorización y procedencia propias. No basta con ampliar
-una lista de rutas.
+V2 añade el conjunto, su continuidad, diffs y revisión descritos más abajo.
+Siguen pendientes borrados, renombrados, subdirectorios y paquetes editables,
+dependencias externas y revisión aislada configurable. No implementa una API
+ni registra una nueva tarea real. Copias, permisos y hashes permiten contrastar
+evidencia; no constituyen aislamiento de seguridad.
 
-La base es `f950a654190f0ab7c6f809955a7e7f460a1c86be`: la
+### Evidencia histórica de la preparación v1
+
+La base de aquella preparación fue `f950a654190f0ab7c6f809955a7e7f460a1c86be`: la
 [CI del merge de la PR #11](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/actions/runs/39266244148)
 pasó 383 métodos en 259,639 s con Python 3.12.15. Es la comprobación del merge en
 `main`, distinta de la CI previa de la PR. Las simulaciones nuevas y la regresión
@@ -223,3 +226,197 @@ inspector de proyectos. Se conservaron stdout, stderr, comando, intérprete y un
 inventario SHA-256 con modos de los 114 archivos del árbol probado. Esta ejecución
 local es distinta de las 383 pruebas de la base y no constituye una nueva CI
 remota. Después solo se completó esta documentación; no se repitieron suites.
+
+## Esquema v2: varios archivos editables
+
+V2 sustituye **solo** `archivo_editable` y `estado_inicial` por
+`archivos_editables`. Las demás claves, límites y precondiciones conservan sus
+reglas. No se convierten configuraciones v1 ni se admiten claves de ambas
+versiones mezcladas. V1 y los dos comandos históricos siguen disponibles.
+
+Ejemplo completo de configuración **sintética**, no instalada como tarea real.
+El SHA de ceros es un marcador que debe sustituirse por el commit local de una
+base preparada con `reglas.py` regular, sin `consulta.py` y con regresión
+protegida. El contrato debe declarar ese mismo SHA; los materiales nombrados
+deben existir y ser coherentes antes de invocar el comando:
+
+```json
+{
+  "version": 2,
+  "identificador": "modulos-sinteticos",
+  "commit_base": "0000000000000000000000000000000000000000",
+  "contrato": "tasks/modulos-sinteticos.md",
+  "archivos_editables": [
+    {"ruta": "reglas.py", "estado_inicial": "existente"},
+    {"ruta": "consulta.py", "estado_inicial": "ausente"}
+  ],
+  "evaluador_aceptacion": "evals/modulos_sinteticos/evaluar.py",
+  "prompts": {
+    "desarrollador": "prompts/modulos-sinteticos-desarrollo.md",
+    "revisor": "prompts/modulos-sinteticos-revision.md"
+  },
+  "referencias": ["docs/modulos-sinteticos.md"],
+  "limites_segundos": {
+    "desarrollador": 300,
+    "revisor": 300,
+    "aceptacion": 60,
+    "regresion": 300,
+    "inventario": 30,
+    "consulta_cli": 10
+  }
+}
+```
+
+La lista debe ser no vacía y sin rutas repetidas. Cada elemento tiene exactamente
+`ruta` y `estado_inicial`, con las mismas restricciones de nombres Python de la
+raíz que v1. Se rechazan rutas de directorios, enlaces en Git, estados iniciales
+distintos de Git, autoridades editables y colisiones con la infraestructura del
+controlador enumerada en `project_task_config.PROTECTED`. No autoriza borrados,
+renombrados, subdirectorios, paquetes locales ni instalación de dependencias.
+La selección no exige limpiar o sustituir el árbol actual: reconstruye la base
+Git y comprueba la conservación del proyecto original.
+
+El evaluador sintético de las pruebas exige que `reglas.calcular()` devuelva 7
+mediante `consulta.valor()`. El módulo nuevo puede ser una dependencia del
+existente. Esto no define una nueva tarea de producto ni una API.
+
+### Identidad y continuidad del conjunto
+
+Cada conjunto tiene un manifiesto de identidad **versión 1** con `archivos`,
+ordenados por `ruta`. Cada entrada contiene `ruta`, `tipo`, `sha256` y `modo`.
+Para un archivo regular, `sha256` es el hash de sus bytes y `modo` es el entero
+de permisos POSIX: 420 significa 0644 y 493 significa 0755. Para una ausencia,
+`tipo` es `ausente`, y hash y modo son `null`. Un archivo vacío regular tiene
+hash y modo propios; nunca sustituye a una ausencia.
+
+La identidad del conjunto es SHA-256 de la codificación UTF-8 de
+`{"version":1,"archivos":[...]}`, con claves ordenadas, `ensure_ascii=False`,
+separadores `(',', ':')` y sin salto de línea. El campo `sha256` exterior se
+añade después; no forma parte de su propio cálculo. Cambiar contenido, ruta,
+presencia o modo cambia la identidad. Para estados parciales inválidos se
+conserva el tipo real (`enlace`, `directorio` o `especial`), modo, hash `null`
+y, en enlaces, `destino`. Estos datos también entran en la identidad; no se
+siguen los enlaces ni se archivan como si fueran candidatos regulares.
+
+La autoridad es la selección en memoria y la referencia congelada antes del
+agente. La validación reconstruye la lista esperada desde esa autoridad, no
+desde un manifiesto entregado. Después de un desarrollo correcto deben existir
+todos los editables como archivos regulares: nuevos 0644 y existentes con el
+modo de Git. Se contrastan también todos los demás archivos y directorios.
+
+En `entrega/` se conservan `archivos/`, `partida/`, `original/`, `diff_base/`,
+`diff_anterior/`, los manifiestos `conjunto.json`, `partida.json`, `original.json`
+y los inventarios `workspace_despues.json` y `cambios.json`. Las copias de
+originales y partidas ausentes no se crean; sus manifiestos registran la
+ausencia. Los diffs de creación utilizan `/dev/null` como origen.
+
+Un segundo intento reconstruye la base y superpone **todos** los archivos del
+anterior, también los que la corrección no cambie. La partida debe tener la
+identidad del conjunto anterior. El feedback v2 incluye `conjunto_sha256`;
+se rechaza feedback referido a otro conjunto. Cada evaluación usa una copia
+nueva de la base con el conjunto completo, nunca el workspace del desarrollador.
+Sus registros v2 incluyen `conjunto_evaluado` y `conjunto_sha256`, y se contrastan
+los informes, identidades de métodos, cierres textuales y archivos conservados.
+
+En los resúmenes y evidencias `orquestacion_configurable_v2`, los campos son
+`partida_conjunto`, `partida_conjunto_sha256`, `conjunto` y `conjunto_sha256`.
+No se reutiliza `candidato_sha256` para nombrar un hash de conjunto. Las reservas,
+presupuestos y comprobaciones de conservación siguen en el mismo bucle.
+Fallos técnicos, timeout o interrupción conservan el conjunto parcial real sin
+evaluarlo como entrega completa ni volver a invocar automáticamente.
+
+### Revisión de todos los módulos
+
+El revisor recibe todos los candidatos, aunque no cambien, y sus diffs frente a
+la base y la partida, contrato, configuración, estados iniciales, referencias y
+resumen de evaluaciones verificadas. La revisión registra
+`revision_conjunto_configurable_v2`, `conjunto_revisado` y `conjunto_sha256`;
+la selección y el resumen de evidencia se identifican como versión 2.
+
+El cierre de imports es AST, sin importar ni ejecutar candidatos. Reconoce
+módulos editables recién creados y usa sus bytes candidatos. Las dependencias
+protegidas proceden de la referencia congelada. Los originales y su cierre de
+dependencias se conservan aparte en `original/`; las dependencias protegidas del
+contexto candidato están en `dependencias/`. No se sustituye una versión
+candidata por el original del mismo nombre. Imports dinámicos, relativos,
+paquetes locales, ambigüedades y dependencias no resolubles impiden invocar la
+revisión.
+
+El esquema del dictamen admite cada archivo autorizado con su límite propio
+de líneas. Se rechazan archivos ajenos, líneas fuera de ese archivo y booleanos
+como números. Un hallazgo con formato correcto sigue siendo una observación
+del modelo pendiente de contraste semántico. La revisión aislada configurable
+v2 no se admite y se rechaza antes de invocar.
+
+Se utilizan los comandos del inicio de esta guía, seleccionando el JSON v2 con
+`--task-config`. El inspector lee solo el resumen y sigue proyectando JSON de
+exportación v1; ni el inspector ni el CSV verifican el conjunto o autorizan su
+incorporación.
+
+## Validación del soporte v2
+
+La base fue el merge de la PR #13,
+`9877b9c2b7b730c70cff5c86969ec6430554452a`. Se verificaron los logs de su
+[CI automática](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/actions/runs/39292118583):
+evento `push`, ese mismo SHA, Python 3.12.15 y comando
+`python3 -B -m unittest discover -s tests -v`; **448 métodos en 292,176 s,
+resultado correcto**. Es CI de la base, no del soporte v2 sin publicar.
+
+Las [pruebas nuevas](../tests/test_multiple_projects.py) usan repositorios Git
+temporales y una CLI simulada. Cubren dos módulos con import local, ausencia
+real, modos 0755/0644, corrección por comportamiento y por dictamen, presupuesto,
+entrega incompleta, cambios ajenos, enlaces, directorios, otra identidad de
+conjunto, procedencia del contexto, cierre AST sin ejecución, fallos técnicos,
+timeout, interrupción y dictamen inválido. La consulta textual, JSON y CSV usa
+resúmenes sintéticos; las [pruebas del inspector](../tests/test_inspect_project.py)
+cubren además un fallo consultable y una consulta incompleta exportable en v2.
+
+Resultados locales enfocados, separados de la CI y del historial v1:
+
+| Comprobación | Métodos | Duración | Resultado |
+| --- | ---: | ---: | --- |
+| Primera versión de las pruebas de conjuntos | 11 | 21,311 s | Correcto, código 0 |
+| Límites por archivo y paquetes; repetición necesaria de continuidad y evidencia tras ajustar el formato de revisión | 3 | 2,472 s | Correcto, código 0 |
+| Compatibilidad configurable v1 | 19 | 18,462 s | Correcto, código 0 |
+| Inspector, incluidos resúmenes v2 | 33 | 8,888 s | Correcto, código 0 |
+| Continuidad y rechazo de otro conjunto tras versionar explícitamente evaluaciones y feedback | 2 | 2,388 s | Correcto, código 0 |
+| Esos dos recorridos tras separar la copia de cada suite v2 | 2 | 2,389 s | Correcto, código 0 |
+
+La traza conservada de la simulación principal tiene estas identidades:
+
+| Etapa | Identidad del conjunto | Resultado registrado |
+| --- | --- | --- |
+| Inicial | `1eb92fa94d37445ea613ec17d65dacd95578c56cfae3e5ff588f0f4172ed354c` | `reglas.py` existente 0755; `consulta.py` ausente |
+| Entrega 1 | `a5c947e2d34cc744b266aca1e2dc0f75e652299f43dc6b1e98da0441cc9e6daf` | Aceptación: 1 método con fallo, devuelve 6 en vez de 7; regresión: 3 correctos |
+| Partida 2 | `a5c947e2d34cc744b266aca1e2dc0f75e652299f43dc6b1e98da0441cc9e6daf` | Coincide con toda la entrega 1 |
+| Entrega 2 | `2e937890f23be5296d23b669391151f57f4ec4ea7dab2d25b98d7636c369d0ae` | Aceptación: 1 correcto; regresión: 3 correctos; revisión simulada aprobada |
+
+`reglas.py` conserva en ambas entregas el SHA-256
+`f9cbec900584db02b4e9ca4fec3d8c42e48c1ce5f09806b1cb5d2a0290e74c88` y modo 0755.
+Solo se corrige `consulta.py`, nuevo 0644. La preparación inicial registra un
+fallo de aceptación por archivo ausente y tres métodos de regresión correctos.
+Se consumen **dos desarrollos y una revisión, 3/4 invocaciones**; queda
+`lista_para_revision_humana`, sin incorporación. Estos recuentos internos de
+fixtures no se suman a los métodos principales de unittest.
+
+La única regresión completa final se ejecutó con
+`python3 -B -m unittest discover -s tests -v`: **462 métodos en 237,038 s,
+Python 3.12.3, código 0**, sin fallos, errores ni omisiones. Incluye los 12 métodos
+nuevos de conjuntos, 33 del inspector y la compatibilidad v1 e histórica. No se
+repitió la suite completa. Estos resultados locales no acreditan llamadas a
+modelos ni una ejecución de CI del nuevo soporte.
+
+La evidencia local excluida de Git está en
+`runs/20261019T200800Z_tareas-multiples_validacion_local_b4f2c68499ec46cc813ecab7cd3eb5a7/`: comandos, stdout/stderr, códigos, identidades únicas, hashes y
+modos antes/después, traza simulada y logs de la CI de la base. El inventario
+general registra un cambio durante la suite: esta guía recibió los dos últimos
+resultados enfocados. Código, pruebas y dependencias conservaron sus hashes y
+modos; después solo se completó documentación. Los registros temporales de los
+fixtures fueron eliminados por las pruebas; se conserva su traza, sin afirmar
+que esos directorios sigan disponibles.
+
+Se contrastaron las 7.587 entradas de los registros históricos, sin cambios.
+Contratos, evaluadores históricos, prompts, benchmark y configuración permanecen
+intactos. El soporte se ha validado mediante simulaciones: queda pendiente una
+ejecución real autorizada de una tarea v2 y su contraste. No permite deducir
+fiabilidad general de los agentes ni aislamiento de seguridad.

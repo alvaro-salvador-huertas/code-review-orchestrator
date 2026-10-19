@@ -4,8 +4,10 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 from case_evidence import digest, parse_json, read_regular, require, unified_diff
 from process_environment import process_environment
@@ -61,15 +63,23 @@ def delivery_diff(before, after, editable):
 
 def flow_configuration(config, max_attempts):
     saved = {"tipo": config["tipo"], "max_intentos": max_attempts, "limites_segundos": config["limites"],
-             "archivo_editable": config["editable"], "suites": config["suites"],
+             "suites": config["suites"],
              "politicas_entorno": ["evaluation", "codex"], "incorporacion_automatica": False, "reanudacion": False}
+    if config.get("multiples"):
+        from project_delivery import identity
+        saved.update(archivos_editables=config["editables"],
+                     conjunto_inicial=identity(config["editables_iniciales"], config))
+    else:
+        saved["archivo_editable"] = config["editable"]
     if config.get("configurable"):
         saved.update(tarea=config["tarea"], commit_base=config["base"], contrato=config["contrato"],
                      prompts={"desarrollador": config["desarrollo"], "revisor": config["revision"]},
-                     referencias=config["referencias"], editable_inicial=config["editable_inicial"],
+                     referencias=config["referencias"],
                      configuracion_sha256=config["configuracion_sha256"],
                      origen_configuracion=config["origen_configuracion"], max_invocaciones=max_attempts * 2,
                      modo_creacion=0o644)
+        if not config.get("multiples"):
+            saved["editable_inicial"] = config["editable_inicial"]
     elif config["ausente"]:
         saved.update(tarea=config["tarea"], commit_base=config["base"], contrato=config["contrato"],
                      esquema=config["esquema"], prompts={"desarrollador": config["desarrollo"], "revisor": config["revision"]},
@@ -128,7 +138,11 @@ def freeze_declared_base(root, destination, config, *, contract=None):
         path.chmod(int(mode[-3:], 8))
         files[name] = {"objeto_git": oid, "sha256": digest(content), "modo_git": mode}
     initial = file_identity(None)
-    if config.get("configurable"):
+    if config.get("multiples"):
+        from project_delivery import identity
+        initial = identity(tree_state(source), config)
+        require(initial == identity(config["editables_iniciales"], config), "Estado inicial del conjunto distinto")
+    elif config.get("configurable"):
         initial = tree_state(source).get(config["editable"], initial)
         require(initial == config["editable_inicial"], "Estado inicial distinto de la configuración")
     else:
@@ -136,8 +150,9 @@ def freeze_declared_base(root, destination, config, *, contract=None):
     (destination / "contrato.md").write_bytes(contract)
     provenance = {"tipo": "proyecto_existente_archivo_ausente", "tarea": config["tarea"], "commit_base": base,
                   "head_origen": git("rev-parse", "HEAD").decode().strip(),
-                  "archivos_base": files, "excluidos": omissions, "editable_inicial": initial,
+                  "archivos_base": files, "excluidos": omissions,
                   "materiales_del_arbol_actual": {config["contrato"]: digest(contract)}, "pruebas_esperadas": {}}
+    provenance["conjunto_inicial" if config.get("multiples") else "editable_inicial"] = initial
     write_json(destination / "procedencia.json", provenance)
     return provenance
 
@@ -211,7 +226,8 @@ def freeze_flow(root, destination, max_attempts, task="inspect-json"):
     generic = config.get("configurable", False)
     if generic:
         provenance = freeze_declared_base(root, destination, config, contract=task.materials[config["contrato"]])
-        provenance.update(tipo="proyecto_configurable_v1", configuracion_sha256=digest(task.raw),
+        provenance.update(tipo="proyecto_configurable_v2" if config.get("multiples") else "proyecto_configurable_v1",
+                          configuracion_sha256=digest(task.raw),
                           origen_configuracion=config["origen_configuracion"])
         (destination / "tarea.json").write_bytes(task.raw)
     else:
@@ -239,10 +255,11 @@ def freeze_flow(root, destination, max_attempts, task="inspect-json"):
             target.write_bytes(task.materials[name])
     for name in ("orchestrate_project.py", "project_flow.py", "project_flow_runner.py",
                  "repair_project.py", "review_project.py", "review_case.py",
-                 *(("project_task_config.py",) if generic else ())):
+                 *(("project_task_config.py",) if generic else ()),
+                 *(("project_delivery.py",) if config.get("multiples") else ())):
         (destination / name).write_bytes(required(PROJECT / name))
     expected = provenance["pruebas_esperadas"]
-    if config["ausente"] or generic:
+    if generic or config["ausente"]:
         expected["regresion"] = inventory_base(destination, config, provenance)
     for kind, name in suites.items():
         if name:
@@ -301,18 +318,24 @@ def evaluate_flow(workspace, frozen, directory, expected, results, progress, che
     config = task_config(task)
     kinds = tuple(config["suites"]) if kinds is None else kinds
     directory.mkdir()
-    for kind in kinds:
+    def evaluate_kind(workspace, kind):
         check()
         if progress:
             progress(f"Evaluación {directory.parent.name}: {kind}.")
         log = directory / kind
         log.mkdir()
         before = tree_state(workspace)
-        candidate = (read_regular if config["ausente"] else required)(workspace / config["editable"])
-        item = results[kind] = {"proceso": None, "clasificacion": "no_acreditada",
-                                "candidato_sha256": digest(candidate)}
-        if config["ausente"]:
-            item["archivo_evaluado"] = file_identity(candidate)
+        item = results[kind] = {"proceso": None, "clasificacion": "no_acreditada"}
+        if config.get("multiples"):
+            from project_delivery import identity
+            item["version"] = 2
+            item["conjunto_evaluado"] = identity(before, config)
+            item["conjunto_sha256"] = item["conjunto_evaluado"]["sha256"]
+        else:
+            candidate = (read_regular if config["ausente"] else required)(workspace / config["editable"])
+            item["candidato_sha256"] = digest(candidate)
+            if config["ausente"]:
+                item["archivo_evaluado"] = file_identity(candidate)
         write_json(log / "proyecto_evaluado.json", before)
         try:
             try:
@@ -337,6 +360,18 @@ def evaluate_flow(workspace, frozen, directory, expected, results, progress, che
             if not item["workspace_intacto"]:
                 raise StopProject(6, "modificacion_no_permitida", "La evaluación alteró su copia")
 
+    for kind in kinds:
+        if config.get("multiples"):
+            from project_delivery import contents, overlay
+            with tempfile.TemporaryDirectory(prefix="evaluacion-conjunto-") as temporary:
+                copy = Path(temporary) / "proyecto"
+                shutil.copytree(frozen / "proyecto", copy)
+                overlay(copy, contents(workspace, config), config)
+                require(tree_state(copy) == tree_state(workspace), "Copia evaluada distinta del conjunto protegido")
+                evaluate_kind(copy, kind)
+        else:
+            evaluate_kind(workspace, kind)
+
 
 def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=False, task=None):
     """Vía explícita nueva: no relaja ni fabrica la procedencia histórica."""
@@ -350,7 +385,7 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
     reference, initial = Evidence(run / "referencia"), Evidence(run / "inicial")
     try:
         record = delivery.json("resultado.json")
-        if record["tipo"] == "orquestacion_configurable_v1":
+        if record["tipo"] in ("orquestacion_configurable_v1", "orquestacion_configurable_v2"):
             from project_task_config import ConfiguredTask
             require(isinstance(task, ConfiguredTask) and task.reference_state is not None,
                     "La vía configurable requiere la referencia de confianza anterior al agente")
@@ -360,7 +395,8 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
         else:
             cfg = task_config(record["tarea"])
         generic = cfg.get("configurable", False)
-        editable, suites, limits = cfg["editable"], cfg["suites"], cfg["limites"]
+        multiple = cfg.get("multiples", False)
+        editable, suites, limits = cfg.get("editable"), cfg["suites"], cfg["limites"]
         base = reference.json("procedencia.json")
         config = reference.json("configuracion.json")
         require(record["tipo"] == base["tipo_flujo"] == config["tipo"] == cfg["tipo"]
@@ -370,9 +406,9 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
                 and initial.state == record["inicial_sha256"], "Referencias o evaluación inicial alteradas")
         require(config["suites"] == suites and config["limites_segundos"] == limits
                 and type(config["max_intentos"]) is int and config["max_intentos"] in (1, 2)
-                and config["archivo_editable"] == editable and config["incorporacion_automatica"] is False,
+                and (multiple or config["archivo_editable"] == editable) and config["incorporacion_automatica"] is False,
                 "Configuración del flujo incoherente")
-        if cfg["ausente"] or generic:
+        if generic or cfg["ausente"]:
             require(config == flow_configuration(cfg, config["max_intentos"]),
                     "Configuración congelada alterada" if generic else "Configuración CSV alterada")
         integrity_flags(record["integridad"], ("alcance_respetado", "original_intacto", "referencia_intacta", "registros_intactos"))
@@ -381,9 +417,10 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
             require(delivery.subtree(name) == state, f"Etapa alterada: {name}")
         contract = reference.read("contrato.md")
         if generic:
+            initial_key = "conjunto_inicial" if multiple else "editable_inicial"
             require(contract == task.materials[cfg["contrato"]]
                     and base["configuracion_sha256"] == digest(task.raw)
-                    and base["editable_inicial"] == cfg["editable_inicial"]
+                    and base[initial_key] == config[initial_key]
                     and base["commit_base"] == cfg["base"], "Procedencia configurable alterada")
         else:
             require(contract == required(Path(project_root) / cfg["contrato"]),
@@ -398,7 +435,7 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
                     "Adaptador de evaluación distinto")
         match = re.search(rb"Base: `([0-9a-f]{40})`", contract)
         require(match and match[1].decode() == base["commit_base"], "Base distinta del contrato")
-        if cfg["ausente"] and not generic:
+        if not generic and cfg["ausente"]:
             require(base["commit_base"] == cfg["base"] and base["editable_inicial"] == file_identity(None),
                     "Base o ausencia original CSV no acreditadas")
         with process_environment() as environment:
@@ -423,48 +460,56 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
             n for n, item in reference.subtree("proyecto").items() if item["tipo"] == "archivo"}, "Base incompleta")
         expected = {kind: static_test_ids(reference.read("autoridades/" + name), "__main__")
                     for kind, name in suites.items() if name}
-        expected["regresion"] = (validate_inventory(reference.path, cfg, base) if cfg["ausente"] or generic else
+        expected["regresion"] = (validate_inventory(reference.path, cfg, base) if generic or cfg["ausente"] else
             sorted(identity for name in files
                    if Path(name).parent == Path("tests") and Path(name).match("test*.py")
                    for identity in static_test_ids(reference.read("proyecto/" + name), Path(name).stem)))
         require(expected == base["pruebas_esperadas"], "Evaluaciones esperadas incompletas")
-        original = None if cfg["ausente"] else reference.read("proyecto/" + editable)
-        candidate = delivery.read("entrega/" + editable)
-        if cfg["ausente"]:
-            require(editable not in reference.subtree("proyecto"), "Editable presente en la base")
-            require(delivery.json("entrega/partida.json") == record["partida"], "Estado de partida incoherente")
-            if record["partida"] == file_identity(None):
-                require("entrega/partida.py" not in delivery.state, "Partida ausente fabricada como archivo")
-                starting = None
-            else:
-                starting = delivery.read("entrega/partida.py")
-                require(record["partida"] == file_identity(starting), "Partida mezclada")
-        else:
-            starting = delivery.read("entrega/partida.py")
-        require((cfg["ausente"] or generic or candidate) and digest(candidate) == record["candidato_sha256"]
-                and digest(starting) == record["partida_sha256"], "Candidato mezclado")
         number = record["numero"]
         require(type(number) is int and 1 <= number <= config["max_intentos"]
                 and delivery.path.parent.name == str(number), "Intento inválido")
-        if number == 1:
-            require(starting == original and record["anterior_sha256"] is None, "Partida inicial distinta")
-        else:
+        previous = None
+        if number > 1:
             previous = Evidence(run / "intentos" / str(number - 1) / "evidencia")
-            require(previous.state == record["anterior_sha256"]
-                    and starting == previous.read("entrega/" + editable), "Continuidad de candidato rota")
-        for name, source in (("candidato.diff", original), ("anterior.diff", starting)):
-            require(delivery.read("entrega/" + name) == delivery_diff(source, candidate, editable),
-                    "Diff incoherente")
-        workspace = reference.subtree("proyecto")
-        workspace[editable] = {"tipo": "archivo", "modo": 0o644 if cfg["ausente"] else workspace[editable]["modo"],
-                               "sha256": digest(candidate)}
-        require(delivery.json("entrega/workspace_despues.json") == workspace, "Alcance de entrega inválido")
-        before = reference.subtree("proyecto")
-        if starting is not None:
-            before[editable] = {**workspace[editable], "sha256": digest(starting)}
-        changes = {name: {"antes": before.get(name), "despues": workspace.get(name)}
-                   for name in before.keys() | workspace.keys() if before.get(name) != workspace.get(name)}
-        require(delivery.json("entrega/cambios.json") == changes, "Cambios de entrega incoherentes")
+            require(previous.state == record["anterior_sha256"], "Evidencia anterior alterada")
+        else:
+            require(record["anterior_sha256"] is None, "Anterior inicial inválido")
+        if multiple:
+            from project_delivery import validate_archive
+            workspace = validate_archive(delivery, reference, previous, record, cfg)
+        else:
+            original = None if cfg["ausente"] else reference.read("proyecto/" + editable)
+            candidate = delivery.read("entrega/" + editable)
+            if cfg["ausente"]:
+                require(editable not in reference.subtree("proyecto"), "Editable presente en la base")
+                require(delivery.json("entrega/partida.json") == record["partida"], "Estado de partida incoherente")
+                if record["partida"] == file_identity(None):
+                    require("entrega/partida.py" not in delivery.state, "Partida ausente fabricada como archivo")
+                    starting = None
+                else:
+                    starting = delivery.read("entrega/partida.py")
+                    require(record["partida"] == file_identity(starting), "Partida mezclada")
+            else:
+                starting = delivery.read("entrega/partida.py")
+            require((cfg["ausente"] or generic or candidate) and digest(candidate) == record["candidato_sha256"]
+                    and digest(starting) == record["partida_sha256"], "Candidato mezclado")
+            if number == 1:
+                require(starting == original, "Partida inicial distinta")
+            else:
+                require(starting == previous.read("entrega/" + editable), "Continuidad de candidato rota")
+            for name, source in (("candidato.diff", original), ("anterior.diff", starting)):
+                require(delivery.read("entrega/" + name) == delivery_diff(source, candidate, editable),
+                        "Diff incoherente")
+            workspace = reference.subtree("proyecto")
+            workspace[editable] = {"tipo": "archivo", "modo": 0o644 if cfg["ausente"] else workspace[editable]["modo"],
+                                   "sha256": digest(candidate)}
+            require(delivery.json("entrega/workspace_despues.json") == workspace, "Alcance de entrega inválido")
+            before = reference.subtree("proyecto")
+            if starting is not None:
+                before[editable] = {**workspace[editable], "sha256": digest(starting)}
+            changes = {name: {"antes": before.get(name), "despues": workspace.get(name)}
+                       for name in before.keys() | workspace.keys() if before.get(name) != workspace.get(name)}
+            require(delivery.json("entrega/cambios.json") == changes, "Cambios de entrega incoherentes")
         agent = record["desarrollo"]
         require(agent["reserva_invocacion"] is True and type(agent["agente"]["invocaciones"]) is int
                 and agent["agente"]["invocaciones"] == 1, "Desarrollo no acreditado")
@@ -485,9 +530,16 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
             process = source.json(prefix + "/resultado.json")
             completed(process)
             require(item["proceso"] == process and (saved is None or item == saved)
-                    and item["workspace_intacto"] is True and source.json(prefix + "/proyecto_evaluado.json") == wanted
-                    and item["candidato_sha256"] == wanted.get(editable, {}).get("sha256"), "Evaluación de otra entrega")
-            if cfg["ausente"]:
+                    and item["workspace_intacto"] is True and source.json(prefix + "/proyecto_evaluado.json") == wanted,
+                    "Evaluación de otra entrega")
+            if multiple:
+                from project_delivery import identity
+                require(type(item["version"]) is int and item["version"] == 2
+                        and item["conjunto_evaluado"] == identity(wanted, cfg)
+                        and item["conjunto_sha256"] == item["conjunto_evaluado"]["sha256"], "Evaluación de otro conjunto")
+            else:
+                require(item["candidato_sha256"] == wanted.get(editable, {}).get("sha256"), "Evaluación de otra entrega")
+            if not multiple and cfg["ausente"]:
                 require(item["archivo_evaluado"] == wanted.get(editable, file_identity(None)),
                         "Estado de archivo evaluado incoherente")
             command = evaluation_command(reference.path, Path(process["directorio_trabajo"]), source.path / prefix, kind,
@@ -509,7 +561,7 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
             counts = validate_evaluation(initial, kind, kind, reference.subtree("proyecto"))
             require(counts["clasificacion"] == ("superadas" if kind == "regresion" else "fallos_asercion"),
                     "Preparación no acreditada")
-        if cfg["ausente"] or generic:
+        if generic or cfg["ausente"]:
             require(preparation_authorized({kind: initial.json(kind + "/evaluacion.json")
                                             for kind in ("aceptacion", "regresion")},
                                            initial.read("aceptacion/stderr.txt"), cfg),
@@ -532,48 +584,56 @@ def delivery_review_evidence(delivery_run, project_root, *, task=None):
     record, sources = validate_delivery(delivery_run, project_root, task=task)
     delivery, reference = sources[:2]
     cfg = task_config(task if task is not None else record["tarea"])
-    editable = cfg["editable"]
-    candidate = delivery.read("entrega/" + editable)
-    materials = {"contrato.md": reference.read("contrato.md"), editable: candidate,
-                 "candidato.diff": delivery.read("entrega/candidato.diff"),
-                 "evaluacion/evaluador_revisado.py": reference.read("autoridades/" + cfg["suites"]["aceptacion"])}
-    if cfg.get("configurable"):
-        materials.update({"configuracion_tarea.json": reference.read("tarea.json"),
-                          "estado_inicial.json": (json.dumps(cfg["editable_inicial"]) + "\n").encode()})
-        materials.update({"referencias/" + name: reference.read("materiales/" + name) for name in cfg["referencias"]})
-        dependency_sources = [candidate]
-        if not cfg["ausente"]:
-            original = reference.read("proyecto/" + editable)
-            materials["original/" + editable] = original
-            dependency_sources.append(original)
-    elif cfg["ausente"]:
-        materials.update({"esquema_003.md": reference.read("autoridades/" + cfg["esquema"]),
-                          "ausencia_original.json": (json.dumps(file_identity(None)) + "\n").encode(),
-                          "partida.json": delivery.read("entrega/partida.json"),
-                          "anterior.diff": delivery.read("entrega/anterior.diff")})
-        dependency_sources = [candidate]
+    if cfg.get("multiples"):
+        from project_delivery import review_context
+        materials = review_context(delivery, reference, cfg)
     else:
-        original = reference.read("proyecto/" + editable)
-        materials.update({"original/inspect_run.py": original,
-                          "pruebas/test_inspect_run.py": reference.read("proyecto/tests/test_inspect_run.py")})
-        dependency_sources = [candidate, original, materials["pruebas/test_inspect_run.py"]]
-    try:
-        materials.update(review_dependencies(dependency_sources,
-            reference.json("procedencia.json")["archivos_base"], lambda n: reference.read("proyecto/" + n),
-            **({"editable": editable} if cfg.get("configurable") else {})))
-    except SyntaxError as exc:
-        if not cfg.get("configurable"):
-            raise
-        raise ValueError(f"Sintaxis inválida en los materiales de revisión: {exc}") from exc
+        editable = cfg["editable"]
+        candidate = delivery.read("entrega/" + editable)
+        materials = {"contrato.md": reference.read("contrato.md"), editable: candidate,
+                     "candidato.diff": delivery.read("entrega/candidato.diff"),
+                     "evaluacion/evaluador_revisado.py": reference.read("autoridades/" + cfg["suites"]["aceptacion"])}
+        if cfg.get("configurable"):
+            materials.update({"configuracion_tarea.json": reference.read("tarea.json"),
+                              "estado_inicial.json": (json.dumps(cfg["editable_inicial"]) + "\n").encode()})
+            materials.update({"referencias/" + name: reference.read("materiales/" + name) for name in cfg["referencias"]})
+            dependency_sources = [candidate]
+            if not cfg["ausente"]:
+                original = reference.read("proyecto/" + editable)
+                materials["original/" + editable] = original
+                dependency_sources.append(original)
+        elif cfg["ausente"]:
+            materials.update({"esquema_003.md": reference.read("autoridades/" + cfg["esquema"]),
+                              "ausencia_original.json": (json.dumps(file_identity(None)) + "\n").encode(),
+                              "partida.json": delivery.read("entrega/partida.json"),
+                              "anterior.diff": delivery.read("entrega/anterior.diff")})
+            dependency_sources = [candidate]
+        else:
+            original = reference.read("proyecto/" + editable)
+            materials.update({"original/inspect_run.py": original,
+                              "pruebas/test_inspect_run.py": reference.read("proyecto/tests/test_inspect_run.py")})
+            dependency_sources = [candidate, original, materials["pruebas/test_inspect_run.py"]]
+        try:
+            materials.update(review_dependencies(dependency_sources,
+                reference.json("procedencia.json")["archivos_base"], lambda n: reference.read("proyecto/" + n),
+                **({"editable": editable} if cfg.get("configurable") else {})))
+        except SyntaxError as exc:
+            if not cfg.get("configurable"):
+                raise
+            raise ValueError(f"Sintaxis inválida en los materiales de revisión: {exc}") from exc
     evidence = dict(materials)
     for name, item in delivery.state.items():
         if item["tipo"] == "archivo":
             evidence["evidencia/" + name] = delivery.read(name)
     authorization = {"tipo": cfg["tipo"], "entrega": str(delivery.path),
                      "commit_base": reference.json("procedencia.json")["commit_base"],
-                     "candidato_sha256": record["candidato_sha256"], "referencia_sha256": reference.state,
+                     "referencia_sha256": reference.state,
                      "evaluaciones": record["evaluaciones"]}
-    if cfg["ausente"] or cfg.get("configurable"):
+    if cfg.get("multiples"):
+        authorization.update(conjunto=record["conjunto"], conjunto_sha256=record["conjunto_sha256"])
+    else:
+        authorization["candidato_sha256"] = record["candidato_sha256"]
+    if cfg.get("configurable") or cfg["ausente"]:
         authorization["tarea"] = cfg["tarea"]
     return evidence, authorization, sources
 
@@ -592,15 +652,20 @@ def delivery_review_materials(evidence, authorization, *, task=None):
         stages[kind]["identidades_sha256"] = digest(json.dumps(identities, ensure_ascii=False).encode())
         mapping[kind] = {n: digest(evidence[prefix + n]) for n in ("evaluacion.json", "resultado.json", "pruebas.json", "stdout.txt", "stderr.txt")}
     summary = {"tipo": "resumen_evidencia_validada_no_dictamen", "procedencia": cfg["tipo"],
-               "commit_base": authorization["commit_base"], "candidato_sha256": authorization["candidato_sha256"],
+               "commit_base": authorization["commit_base"],
                "evaluaciones": stages, "fuentes_sha256": mapping, "regresion_reutilizada": False}
+    if cfg.get("multiples"):
+        summary.update(version=2, conjunto=authorization["conjunto"], conjunto_sha256=authorization["conjunto_sha256"])
+    else:
+        summary["candidato_sha256"] = authorization["candidato_sha256"]
     if "orquestacion" in authorization:
         summary.update(regresion_reutilizada=True, evaluaciones_nuevas=False,
                        intento_origen=authorization["intento"],
                        alcance="Evaluaciones conservadas de este candidato exacto, verificadas por lectura. "
                                "No sustituyen la revisión ni demuestran corrección general.")
     materials["resumen_evidencia.json"] = (json.dumps(summary, ensure_ascii=False, indent=2) + "\n").encode()
-    materials["respuesta.schema.json"] = json.dumps(response_schema(
-        len(materials[cfg["editable"]].splitlines()), editable=cfg["editable"])).encode()
-    return materials, {"version": 1, "fuentes_sha256": mapping,
+    lines = ({name: len(materials[name].splitlines()) for name in cfg["editables"]} if cfg.get("multiples")
+             else len(materials[cfg["editable"]].splitlines()))
+    materials["respuesta.schema.json"] = json.dumps(response_schema(lines, editable=cfg.get("editable"))).encode()
+    return materials, {"version": 2 if cfg.get("multiples") else 1, "fuentes_sha256": mapping,
                        "materiales": {n: digest(data) for n, data in materials.items()}}

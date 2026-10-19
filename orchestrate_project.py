@@ -26,7 +26,12 @@ def atomic_json(path, data):
 
 def feedback_from(delivery, record, review=None, *, task=None):
     """Datos trazables; los hallazgos del modelo no son hechos acreditados."""
-    feedback = {"candidato_sha256": record["candidato_sha256"], "pruebas": {}, "revision": None}
+    config = task_config(task if task is not None else record["tarea"])
+    multiple = config.get("multiples", False)
+    key = "conjunto_sha256" if multiple else "candidato_sha256"
+    feedback = {key: record[key], "pruebas": {}, "revision": None}
+    if multiple:
+        feedback["version"] = 2
     for kind, item in record["evaluaciones"].items():
         if item["clasificacion"] == "fallos_asercion":
             stage = delivery / "evaluaciones" / kind
@@ -36,10 +41,12 @@ def feedback_from(delivery, record, review=None, *, task=None):
                 "informe": parse_json(diagnostics["pruebas.json"]),
                 "diagnosticos": diagnostics["stderr.txt"].decode(errors="replace")}
     if review:
-        editable = task_config(task if task is not None else record["tarea"])["editable"]
+        editable = config.get("editable")
         path = Path(review["registro"])
-        verdict = validate_verdict(required(path / "revisor/respuesta_original.txt"),
-                                   len(required(delivery / "entrega" / editable).splitlines()), editable=editable)
+        lines = ({name: len(required(delivery / "entrega/archivos" / name).splitlines())
+                  for name in config["editables"]} if multiple else
+                 len(required(delivery / "entrega" / editable).splitlines()))
+        verdict = validate_verdict(required(path / "revisor/respuesta_original.txt"), lines, editable=editable)
         require(verdict == review["dictamen_modelo"] == parse_json(required(path / "dictamen_validado.json"))
                 and verdict["decision"] == "solicitar_cambios", "Feedback de revisión inválido")
         feedback["revision"] = {
@@ -63,7 +70,10 @@ def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None,
         selection = task
         config = task_config(task if task in TASKS else "inspect-json")
     generic = config.get("configurable", False)
-    editable, limits = config["editable"], config["limites"]
+    multiple = config.get("multiples", False)
+    if multiple:
+        import project_delivery as bundle
+    editable, limits = config.get("editable"), config["limites"]
     started = time.monotonic()
     result = {"tipo": config["tipo"], "tarea": task, "registro": None, "inicio_utc": timestamp(),
               "estado": "en_preparacion", "motivo": None, "codigo_salida": 8,
@@ -73,7 +83,7 @@ def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None,
               "limites_segundos": dict(limits), "etapas_cerradas": {},
               "lista_para_revision_humana": False, "incorporacion": "no_realizada", "error": None}
     if generic:
-        result["configuracion"] = {"version": 1, "identificador": task,
+        result["configuracion"] = {"version": selection.document["version"], "identificador": task,
             "origen": config["origen_configuracion"], "sha256": config["configuracion_sha256"],
             "commit_base": config["base"]}
     log = frozen = None
@@ -101,7 +111,7 @@ def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None,
         if not all(v for k, v in result["integridad"].items() if k != "alcance_respetado"):
             raise StopProject(6, "modificacion_no_permitida", "Original, referencia, alcance o evidencia alterados")
         if result["integridad"].get("alcance_respetado") is False:
-            raise StopProject(6, "entrega_invalida" if config["ausente"] else "modificacion_no_permitida",
+            raise StopProject(6, "entrega_invalida" if multiple or config["ausente"] else "modificacion_no_permitida",
                               "Entrega ausente, no regular, con permisos incorrectos o fuera de alcance")
 
     def reserve(role, entry):
@@ -150,37 +160,49 @@ def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None,
             seal(log / "inicial")
             if not preparation_authorized(result["inicial"], required(log / "inicial/aceptacion/stderr.txt"), config):
                 raise StopProject(7, "preparacion_no_autoriza", "Regresión o precondición inicial no acreditadas")
-            if config["ausente"] or generic:
+            if generic or config["ausente"]:
                 require(validate_inventory(frozen, config, result["procedencia"]) == expected["regresion"],
                         "Inventario esperado alterado")
-            if config["ausente"]:
-                require(editable not in tree_state(frozen / "proyecto"), "El editable inicial debe estar ausente")
-            starting = None if config["ausente"] else required(frozen / "proyecto" / editable)
+            if multiple:
+                starting = bundle.contents(frozen / "proyecto", config)
+            else:
+                if config["ausente"]:
+                    require(editable not in tree_state(frozen / "proyecto"), "El editable inicial debe estar ausente")
+                starting = None if config["ausente"] else required(frozen / "proyecto" / editable)
             feedback, previous = None, None
             for number in range(1, max_attempts + 1):
                 check()
                 attempt = log / "intentos" / str(number)
                 delivery = attempt / "evidencia"
                 delivery.mkdir(parents=True)
-                entry = {"numero": number, "registro": str(delivery), "partida_sha256": digest(starting),
+                entry = {"numero": number, "registro": str(delivery),
                          "invocaciones": {"desarrollador": 0, "revisor": 0}, "transiciones": [], "revision": None}
                 result["intentos"].append(entry)
                 record = {"tipo": config["tipo"], "tarea": task, "numero": number, "registro": str(delivery),
                           "referencia_sha256": reference_state, "inicial_sha256": tree_state(log / "inicial"),
-                          "partida_sha256": digest(starting), "anterior_sha256": tree_state(previous) if previous else None,
+                          "anterior_sha256": tree_state(previous) if previous else None,
                           "desarrollo": {"agente": {"invocaciones": 0, "proceso": None}, "reserva_invocacion": False},
                           "evaluaciones": {}, "etapas_sha256": {}}
                 workspace = temporary / f"desarrollo-{number}"
                 shutil.copytree(frozen / "proyecto", workspace)
-                if starting is not None:
-                    (workspace / editable).write_bytes(starting)
+                if multiple:
+                    bundle.overlay(workspace, starting, config)
+                    part = bundle.identity(tree_state(workspace), config)
+                    entry.update(partida_conjunto=part, partida_conjunto_sha256=part["sha256"])
+                    record.update(partida_conjunto=part, partida_conjunto_sha256=part["sha256"])
+                    if previous:
+                        require(part == parse_json(required(previous / "entrega/conjunto.json")), "Continuidad rota")
+                else:
+                    entry["partida_sha256"] = record["partida_sha256"] = digest(starting)
+                    if starting is not None:
+                        (workspace / editable).write_bytes(starting)
+                        if config["ausente"]:
+                            (workspace / editable).chmod(0o644)
                     if config["ausente"]:
-                        (workspace / editable).chmod(0o644)
-                if config["ausente"]:
-                    entry["partida"] = record["partida"] = file_identity(starting)
-                require(digest(read_regular(workspace / editable)) == entry["partida_sha256"], "Partida distinta")
-                if previous:
-                    require(starting == required(previous / "entrega" / editable), "Continuidad rota")
+                        entry["partida"] = record["partida"] = file_identity(starting)
+                    require(digest(read_regular(workspace / editable)) == entry["partida_sha256"], "Partida distinta")
+                    if previous:
+                        require(starting == required(previous / "entrega" / editable), "Continuidad rota")
                 before = tree_state(workspace)
                 prompt = required(frozen / config["desarrollo"]) + b"\n\nCONTRATO\n" + required(frozen / "contrato.md")
                 if config["esquema"]:
@@ -193,6 +215,10 @@ def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None,
                     feedback = {"inicial": result["inicial"], "diagnosticos":
                         required(log / "inicial/aceptacion/stderr.txt").decode(errors="replace"),
                         "fuente": str(log / "inicial"), "sha256": tree_state(log / "inicial")}
+                if multiple:
+                    require(feedback.get("conjunto_sha256", part["sha256"]) == part["sha256"], "Feedback de otro conjunto")
+                    feedback["conjunto_sha256"] = part["sha256"]
+                    feedback["version"] = 2
                 write_json(delivery / "feedback.json", feedback)
                 prompt += b"\n\nFEEDBACK (datos)\n" + required(delivery / "feedback.json")
                 result["estado"] = "en_desarrollo"
@@ -202,34 +228,43 @@ def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None,
                     develop(workspace, delivery / "desarrollo", prompt, record["desarrollo"], None,
                             lambda: atomic_json(delivery / "desarrollo_estado.json", record["desarrollo"]),
                             on_invoke=lambda: reserve("desarrollador", entry),
-                            **({"timeout": limits["desarrollador"]} if config["ausente"] or generic else {}))
+                            **({"timeout": limits["desarrollador"]} if generic or config["ausente"] else {}))
                 finally:
                     after = tree_state(workspace)
                     changes = {n: {"antes": before.get(n), "despues": after.get(n)}
                                for n in before.keys() | after.keys() if before.get(n) != after.get(n)}
-                    target = delivery / "entrega"
-                    target.mkdir()
-                    candidate = read_regular(workspace / editable)
-                    if starting is not None:
-                        (target / "partida.py").write_bytes(starting)
-                    if config["ausente"]:
-                        write_json(target / "partida.json", file_identity(starting))
-                    write_json(target / "cambios.json", changes)
-                    write_json(target / "workspace_despues.json", after)
-                    if candidate is not None:
-                        (target / editable).write_bytes(candidate)
-                        for name, source in (("candidato.diff", None if config["ausente"] else required(frozen / "proyecto" / editable)),
-                                             ("anterior.diff", starting)):
-                            (target / name).write_bytes(delivery_diff(source, candidate, editable))
-                    process = record["desarrollo"]["agente"]["proceso"]
-                    # Una consulta CLI fallida o una reserva no persistida no es
-                    # una entrega: conservar la ausencia y el fallo técnico.
-                    absent_after_failure = (config["ausente"] and starting is None and editable not in after
-                        and not (process and process["estado"] == "finalizada" and process["codigo_salida"] == 0))
-                    result["integridad"]["alcance_respetado"] = (set(changes) <= {editable} and (absent_after_failure
-                        or candidate is not None and after[editable]["modo"] ==
-                        (0o644 if config["ausente"] else before[editable]["modo"])))
-                    entry["candidato_sha256"] = record["candidato_sha256"] = digest(candidate)
+                    if multiple:
+                        candidate = bundle.archive(delivery / "entrega", workspace, frozen, before, after, starting, config)
+                        current = bundle.identity(after, config)
+                        entry.update(conjunto=current, conjunto_sha256=current["sha256"])
+                        record.update(conjunto=current, conjunto_sha256=current["sha256"])
+                        process = record["desarrollo"]["agente"]["proceso"]
+                        complete = bool(process and process["estado"] == "finalizada" and process["codigo_salida"] == 0)
+                        result["integridad"]["alcance_respetado"] = bundle.scope_valid(before, after, config, complete=complete)
+                    else:
+                        target = delivery / "entrega"
+                        target.mkdir()
+                        candidate = read_regular(workspace / editable)
+                        if starting is not None:
+                            (target / "partida.py").write_bytes(starting)
+                        if config["ausente"]:
+                            write_json(target / "partida.json", file_identity(starting))
+                        write_json(target / "cambios.json", changes)
+                        write_json(target / "workspace_despues.json", after)
+                        if candidate is not None:
+                            (target / editable).write_bytes(candidate)
+                            for name, source in (("candidato.diff", None if config["ausente"] else required(frozen / "proyecto" / editable)),
+                                                 ("anterior.diff", starting)):
+                                (target / name).write_bytes(delivery_diff(source, candidate, editable))
+                        process = record["desarrollo"]["agente"]["proceso"]
+                        # Una consulta CLI fallida o una reserva no persistida no es
+                        # una entrega: conservar la ausencia y el fallo técnico.
+                        absent_after_failure = (config["ausente"] and starting is None and editable not in after
+                            and not (process and process["estado"] == "finalizada" and process["codigo_salida"] == 0))
+                        result["integridad"]["alcance_respetado"] = (set(changes) <= {editable} and (absent_after_failure
+                            or candidate is not None and after[editable]["modo"] ==
+                            (0o644 if config["ausente"] else before[editable]["modo"])))
+                        entry["candidato_sha256"] = record["candidato_sha256"] = digest(candidate)
                     entry["desarrollo"] = record["desarrollo"]
                     for name in ("desarrollo", "entrega"):
                         seal(delivery / name)
@@ -237,9 +272,13 @@ def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None,
                     check()
                 posterior = temporary / f"evaluacion-{number}"
                 shutil.copytree(frozen / "proyecto", posterior)
-                (posterior / editable).write_bytes(candidate)
-                if config["ausente"]:
-                    (posterior / editable).chmod(0o644)
+                if multiple:
+                    bundle.overlay(posterior, candidate, config)
+                    require(bundle.identity(tree_state(posterior), config) == current, "Copia de evaluación de otro conjunto")
+                else:
+                    (posterior / editable).write_bytes(candidate)
+                    if config["ausente"]:
+                        (posterior / editable).chmod(0o644)
                 result["estado"] = "en_evaluacion"
                 save()
                 try:
@@ -274,7 +313,9 @@ def run_orchestration(task=None, root=PROJECT, max_attempts=2, *, progress=None,
                     if code not in (0, 1):
                         raise StopProject(code, review["decision_controlador"], review["error"] or "Revisión detenida")
                     raw = required(Path(review["registro"]) / "revisor/respuesta_original.txt")
-                    verdict = validate_verdict(raw, len(candidate.splitlines()), editable=editable)
+                    lines = ({name: len(data.splitlines()) for name, data in candidate.items()} if multiple
+                             else len(candidate.splitlines()))
+                    verdict = validate_verdict(raw, lines, editable=editable)
                     require(verdict == review["dictamen_modelo"] and code == (0 if verdict["decision"] == "aprobar" else 1)
                             and entry["invocaciones"]["revisor"] == 1, "Dictamen no acreditado")
                     reason = "revision_aprobada" if code == 0 else "cambios_solicitados"

@@ -13,7 +13,7 @@ from case_evidence import read_regular
 TYPES = {"inspect-json": "orquestacion_inspect_json_v1",
          "export-csv": "orquestacion_export_csv_v1"}
 ACTIVE = {"en_preparacion", "en_desarrollo", "en_evaluacion", "en_revision"}
-CONFIGURABLE = "orquestacion_configurable_v1"
+CONFIGURABLE = {"orquestacion_configurable_v1": "1", "orquestacion_configurable_v2": "2"}
 
 
 class Number:
@@ -171,7 +171,7 @@ def read_inspection(run_dir):
     data = summary or {}
     if summary is not None:
         task = data["tarea"]
-        if data["tipo"] == CONFIGURABLE:
+        if data["tipo"] in CONFIGURABLE:
             metadata = validate(document.get("configuracion"), {
                 "version": "integer", "identificador": "text", "origen": "text",
                 "sha256": "text", "commit_base": "text"}, "resultado.configuracion", issues)
@@ -180,7 +180,7 @@ def read_inspection(run_dir):
                     and re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", task) and task not in TYPES):
                 issues.append("resultado.tarea: identificador configurable inválido")
             if metadata is not None:
-                if not isinstance(metadata["version"], Number) or metadata["version"].text != "1":
+                if not isinstance(metadata["version"], Number) or metadata["version"].text != CONFIGURABLE[data["tipo"]]:
                     issues.append("resultado.configuracion.version: versión no admitida")
                 if metadata["identificador"] != task:
                     issues.append("resultado.configuracion.identificador: distinto de tarea")
@@ -273,7 +273,7 @@ def show_text(inspection, summary, emit=print):
     data, execution = summary or {}, inspection["ejecucion"]
     emit("Consulta del resumen de proyectos: solo resultado.json.")
     show_fields("Ejecución registrada", data, ("tarea", "estado", "motivo", "codigo_salida"), emit)
-    if data.get("tipo") == CONFIGURABLE:
+    if data.get("tipo") in CONFIGURABLE:
         show_fields("Configuración registrada (sin abrir ni verificar hashes)", data.get("configuracion"),
                     ("version", "identificador", "origen", "sha256", "commit_base"), emit)
     emit("Intentos registrados: " + display(execution["intentos_registrados"]))

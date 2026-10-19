@@ -282,9 +282,9 @@ def validate_evidence(development_run, reevaluation_run, project_root=PROJECT):
         raise ValueError(f"Evidencia incompleta o inválida: {exc}") from exc
 
 
-def review_dependencies(sources, files, read_file, *, editable="inspect_run.py"):
+def review_dependencies(sources, files, read_file, *, editable="inspect_run.py", editables=None):
     """Cerrar imports estáticos del código y pruebas pertinentes, sin importarlos."""
-    pending, seen, dependencies = list(sources), {editable}, {}
+    pending, seen, dependencies = list(sources), set(editables) if editables is not None else {editable}, {}
     while pending:
         for node in ast.walk(ast.parse(pending.pop())):
             require(not isinstance(node, ast.ImportFrom) or node.level == 0,
@@ -297,6 +297,9 @@ def review_dependencies(sources, files, read_file, *, editable="inspect_run.py")
                        else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
             for module in modules:
                 name = module.split(".")[0] + ".py"
+                if editables is not None:
+                    require(not any(path in files for path in (module.split(".")[0], "tests/" + module.split(".")[0])),
+                            "Paquete local no admitido en la selección")
                 local = [path for path in (name, "tests/" + name) if path in files]
                 require(len(local) <= 1, "Dependencia local ambigua")
                 if not local:
@@ -366,6 +369,12 @@ def review_materials(evidence, authorization):
 
 
 def response_schema(line_count, *, editable="inspect_run.py"):
+    if isinstance(line_count, dict):
+        schema = response_schema(0)
+        schema["properties"]["hallazgos"]["items"] = {"anyOf": [
+            response_schema(count, editable=name)["properties"]["hallazgos"]["items"]
+            for name, count in sorted(line_count.items())]}
+        return schema
     fields = {"archivo": {"type": "string", "enum": [editable]},
               "linea": {"type": "integer", "minimum": 1, "maximum": line_count},
               **{key: {"type": "string", "minLength": 1} for key in ("requisito", "explicacion", "ejemplo")}}
@@ -377,6 +386,7 @@ def response_schema(line_count, *, editable="inspect_run.py"):
 
 
 def validate_verdict(raw, line_count, *, editable="inspect_run.py"):
+    lines = line_count if isinstance(line_count, dict) else {editable: line_count}
     verdict = parse_json(raw)
     require(isinstance(verdict, dict) and set(verdict) == {"decision", "resumen", "hallazgos"}, "Objeto de dictamen inválido")
     require(verdict["decision"] in ("aprobar", "solicitar_cambios")
@@ -387,8 +397,8 @@ def validate_verdict(raw, line_count, *, editable="inspect_run.py"):
     for finding in findings:
         require(isinstance(finding, dict) and set(finding) == {"archivo", "linea", "requisito", "explicacion", "ejemplo"},
                 "Estructura de hallazgo inválida")
-        require(finding["archivo"] == editable and type(finding["linea"]) is int
-                and 1 <= finding["linea"] <= line_count, "Archivo o línea fuera del candidato")
+        require(isinstance(finding["archivo"], str) and finding["archivo"] in lines and type(finding["linea"]) is int
+                and 1 <= finding["linea"] <= lines[finding["archivo"]], "Archivo o línea fuera del candidato")
         require(all(isinstance(finding[k], str) and finding[k].strip() for k in ("requisito", "explicacion", "ejemplo")),
                 "Falta requisito, explicación o ejemplo")
     return verdict
@@ -417,7 +427,8 @@ def run_delivery_review(delivery_run, project_root=PROJECT, *, progress=None, on
             **({"task": task} if config.get("configurable") else {}))
     return _run_review(load,
                        select, frozen / config["revision"], project_root,
-                       progress=progress, on_invoke=reserve, task=config["tarea"], editable=config["editable"],
+                       progress=progress, on_invoke=reserve, task=config["tarea"],
+                       editable=tuple(config["editables"]) if config.get("multiples") else config["editable"],
                        review_timeout=config["limites"]["revisor"] if task == "export-csv" or config.get("configurable") else None,
                        preparation="Validando entrega nueva y sus evaluaciones completas.")
 
@@ -608,13 +619,17 @@ def _run_review(load_evidence, select_materials, prompt_path, project_root, *, p
         notify(preparation)
         evidence, authorization, sources = load_evidence()
         materials, selection = select_materials(evidence, authorization)
+        if authorization.get("tipo") == "orquestacion_configurable_v2":
+            result.update(tipo="revision_conjunto_configurable_v2", conjunto_revisado=authorization["conjunto"],
+                          conjunto_sha256=authorization["conjunto_sha256"])
         require(all(source.path != root / "runs" and source.path not in (root / "runs").parents for source in sources),
                 "El registro nuevo quedaría dentro de una entrada")
         result["evidencia_previa_valida"] = True
         original_state = tree_state(root, filter_local=True)
         prompt = read_regular(prompt_path)
         require(prompt is not None and prompt.strip(), "Faltan las instrucciones específicas")
-        line_count = len(materials[editable].splitlines())
+        line_count = ({name: len(materials[name].splitlines()) for name in editable} if isinstance(editable, tuple)
+                      else len(materials[editable].splitlines()))
         parent = Path(tempfile.gettempdir()).resolve()
         require(parent != root and root not in parent.parents, "El workspace debe estar fuera del proyecto")
         (root / "runs").mkdir(exist_ok=True)
