@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "identificador": "booking-core",
+  "commit_base": "2448d88a8fd89f73415140f3b789292df6a97482",
+  "contrato": "tasks/006-booking-core.md",
+  "archivos_editables": [
+    {"ruta": "check_booking.py", "estado_inicial": "existente"},
+    {"ruta": "booking_core.py", "estado_inicial": "ausente"}
+  ],
+  "evaluador_aceptacion": "evals/tareas_reales/booking_core/evaluar.py",
+  "prompts": {
+    "desarrollador": "prompts/developer_booking_core_flow.md",
+    "revisor": "prompts/reviewer_booking_core_flow.md"
+  },
+  "referencias": ["tasks/005-check-booking.md"],
+  "limites_segundos": {
+    "desarrollador": 300,
+    "revisor": 300,
+    "aceptacion": 60,
+    "regresion": 600,
+    "inventario": 30,
+    "consulta_cli": 10
+  }
+}
