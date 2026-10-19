@@ -1,5 +1,10 @@
 # Flujo acotado de inspect-json
 
+Esta página conserva el recorrido y los presupuestos de `inspect-json`.
+La segunda selección, `export-csv`, comparte el bucle de orquestación y tiene
+[guía, base, presupuestos y preparación propios](../evals/tareas_reales/export_csv/README.md#integración-csv-validada-con-simulaciones).
+Su revisión aislada todavía no está admitida: se rechaza antes de invocar un agente.
+
 ```bash
 python3 -B orchestrate_project.py inspect-json --max-attempts 2
 ```

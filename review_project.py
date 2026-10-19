@@ -365,8 +365,8 @@ def review_materials(evidence, authorization):
     return context, mapping
 
 
-def response_schema(line_count):
-    fields = {"archivo": {"type": "string", "enum": ["inspect_run.py"]},
+def response_schema(line_count, *, editable="inspect_run.py"):
+    fields = {"archivo": {"type": "string", "enum": [editable]},
               "linea": {"type": "integer", "minimum": 1, "maximum": line_count},
               **{key: {"type": "string", "minLength": 1} for key in ("requisito", "explicacion", "ejemplo")}}
     return {"type": "object", "additionalProperties": False, "required": ["decision", "resumen", "hallazgos"],
@@ -376,7 +376,7 @@ def response_schema(line_count):
                                                                         "required": list(fields), "properties": fields}}}}
 
 
-def validate_verdict(raw, line_count):
+def validate_verdict(raw, line_count, *, editable="inspect_run.py"):
     verdict = parse_json(raw)
     require(isinstance(verdict, dict) and set(verdict) == {"decision", "resumen", "hallazgos"}, "Objeto de dictamen inválido")
     require(verdict["decision"] in ("aprobar", "solicitar_cambios")
@@ -387,7 +387,7 @@ def validate_verdict(raw, line_count):
     for finding in findings:
         require(isinstance(finding, dict) and set(finding) == {"archivo", "linea", "requisito", "explicacion", "ejemplo"},
                 "Estructura de hallazgo inválida")
-        require(finding["archivo"] == "inspect_run.py" and type(finding["linea"]) is int
+        require(finding["archivo"] == editable and type(finding["linea"]) is int
                 and 1 <= finding["linea"] <= line_count, "Archivo o línea fuera del candidato")
         require(all(isinstance(finding[k], str) and finding[k].strip() for k in ("requisito", "explicacion", "ejemplo")),
                 "Falta requisito, explicación o ejemplo")
@@ -399,16 +399,22 @@ def run_review(development_run, reevaluation_run, project_root=PROJECT, *, progr
                        review_materials, Path(project_root) / PROMPT, project_root, progress=progress)
 
 
-def run_delivery_review(delivery_run, project_root=PROJECT, *, progress=None, on_invoke=None):
+def run_delivery_review(delivery_run, project_root=PROJECT, *, progress=None, on_invoke=None, task="inspect-json"):
     """Revisar una entrega nueva completa; no acepta la procedencia histórica."""
-    from project_flow import REVIEW_PROMPT, delivery_review_evidence, delivery_review_materials
+    from project_flow import task_config, delivery_review_evidence, delivery_review_materials
+    config = task_config(task)
     frozen = Path(delivery_run).absolute().parent.parent.parent / "referencia"
     def reserve():
         require(on_invoke is not None, "La entrega nueva requiere una reserva del orquestador; no hay reanudación")
         on_invoke()
-    return _run_review(lambda: delivery_review_evidence(delivery_run, project_root),
-                       delivery_review_materials, frozen / REVIEW_PROMPT, project_root,
-                       progress=progress, on_invoke=reserve,
+    def load():
+        evidence, authorization, sources = delivery_review_evidence(delivery_run, project_root)
+        require(authorization["tipo"] == config["tipo"], "Tarea de revisión distinta de la entrega")
+        return evidence, authorization, sources
+    return _run_review(load,
+                       delivery_review_materials, frozen / config["revision"], project_root,
+                       progress=progress, on_invoke=reserve, task=task, editable=config["editable"],
+                       review_timeout=config["limites"]["revisor"] if task == "export-csv" else None,
                        preparation="Validando entrega nueva y sus evaluaciones completas.")
 
 
@@ -419,6 +425,7 @@ def orchestration_review_evidence(orchestration_run, attempt, project_root=PROJE
     origin = Evidence(orchestration_run)
     try:
         summary = origin.json("resultado.json")
+        require(summary.get("tarea") != "export-csv", "La revisión aislada de export-csv no está admitida")
         require(summary["tipo"] == TYPE and summary["tarea"] == "inspect-json"
                 and summary["registro"] == str(origin.path), "Registro de orquestación incoherente")
         closed_states = {"lista_para_revision_humana": 0, "intentos_agotados": 1,
@@ -568,10 +575,11 @@ def run_isolated_review(orchestration_run, attempt, operation_id, project_root=P
 
 
 def _run_review(load_evidence, select_materials, prompt_path, project_root, *, progress=None, on_invoke=None,
-                preparation="Validando desarrollo, reevaluación y regresión histórica.", operation=None):
+                preparation="Validando desarrollo, reevaluación y regresión histórica.", operation=None,
+                task="inspect-json", editable="inspect_run.py", review_timeout=None):
     root = Path(project_root).resolve()
     started = time.monotonic()
-    result = {"tarea": "inspect-json", "registro": None, "inicio_utc": timestamp(),
+    result = {"tarea": task, "registro": None, "inicio_utc": timestamp(),
               "decision_controlador": "en_preparacion", "codigo_salida": 8,
               "evidencia_previa_valida": False, "reserva_invocacion": False, "max_invocaciones": 1,
               "revisor": {"invocaciones": 0, "estado": "no_ejecutado", "codigo_salida": None},
@@ -579,7 +587,7 @@ def _run_review(load_evidence, select_materials, prompt_path, project_root, *, p
               "limites_segundos": {"revisor": 180, "consulta_cli": 10},
               "integridad": {}, "error": None}
     log = archive = None
-    timeout = operation["limite_efectivo_segundos"] if operation else 180
+    timeout = operation["limite_efectivo_segundos"] if operation else (180 if review_timeout is None else review_timeout)
     result["limites_segundos"]["revisor"] = timeout
     if operation:
         result["operacion"] = operation
@@ -602,12 +610,12 @@ def _run_review(load_evidence, select_materials, prompt_path, project_root, *, p
         original_state = tree_state(root, filter_local=True)
         prompt = read_regular(prompt_path)
         require(prompt is not None and prompt.strip(), "Faltan las instrucciones específicas")
-        line_count = len(materials["inspect_run.py"].splitlines())
+        line_count = len(materials[editable].splitlines())
         parent = Path(tempfile.gettempdir()).resolve()
         require(parent != root and root not in parent.parents, "El workspace debe estar fuera del proyecto")
         (root / "runs").mkdir(exist_ok=True)
         name = ("inspect-json_isolated-review_" + operation["id"] if operation else
-                time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "_inspect-json_review_" + uuid4().hex)
+                time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + f"_{task}_review_" + uuid4().hex)
         destination = root / "runs" / name
         require(all(destination.resolve() != s.path.resolve() and s.path.resolve() not in destination.resolve().parents
                     for s in sources), "La operación quedaría dentro de una entrada")
@@ -695,7 +703,7 @@ def _run_review(load_evidence, select_materials, prompt_path, project_root, *, p
                 notify(f"Revisión 1/1: iniciando Codex en una sesión nueva, límite {timeout} s.")
             try:
                 check()
-                options = {"timeout": timeout} if operation else {}
+                options = {"timeout": timeout} if operation or review_timeout is not None else {}
                 result["revisor"] = invoke_reviewer(workspace, final, prompt, agent_log, on_invoke=reserve, **options)
             except ProcessInterrupted as exc:
                 result["revisor"].update(exc.result)
@@ -717,7 +725,7 @@ def _run_review(load_evidence, select_materials, prompt_path, project_root, *, p
                 notify("Revisor finalizado; validando formato y coherencia del dictamen.")
                 try:
                     require(raw is not None, "No hay respuesta final")
-                    verdict = validate_verdict(raw, line_count)
+                    verdict = validate_verdict(raw, line_count, editable=editable)
                 except (ValueError, TypeError) as exc:
                     stop(5, "respuesta_invalida", str(exc))
                 else:
