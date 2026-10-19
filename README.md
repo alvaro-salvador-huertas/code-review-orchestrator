@@ -196,6 +196,32 @@ La [guía CSV](evals/tareas_reales/export_csv/README.md#incorporación-explícit
 conserva el SHA-256, procedencia y validación local, separados de las simulaciones
 previas. La incorporación no reanuda la orquestación ni modifica sus registros.
 
+La [consulta de disponibilidad check-booking](evals/tareas_reales/check_booking/README.md)
+también está incorporada localmente, con biblioteca estándar y sin credenciales:
+
+```bash
+python3 -B check_booking.py solicitud.json
+```
+
+Lee un único JSON con `solicitud` y `reservas`, valida fechas UTC e intervalos
+`[inicio, fin)` y conserva recursos e identificadores literales. Una solicitud
+de Sala Norte de 10:00 a 11:00 sin reservas devuelve
+`{"disponible": true, "conflictos": []}`; una reserva `r-2` del mismo recurso
+de 10:30 a 11:30 devuelve `{"disponible": false, "conflictos": ["r-2"]}`.
+Ambas consultas terminan con código 0; entradas inválidas usan 1 y argumentos
+incorrectos 2. La guía incluye el JSON completo de este ejemplo sintético.
+No almacena reservas ni garantiza exclusión concurrente; una futura API queda
+fuera de su alcance.
+
+Procede de dos desarrollos y una revisión reales, aprobada sin hallazgos, seguida
+de [contraste automático asistido por Codex](evals/tareas_reales/check_booking/contraste-real-2026-10-19.md)
+e incorporación explícita de los bytes autorizados. La corrección automática
+afectó únicamente al diagnóstico Unicode. Ahora se corrige además el falso
+negativo del evaluador actual, que exigía el nombre literal del archivo pese a
+que el contrato admite diagnósticos de redacción libre; se conservan sus 186
+fallos históricos. La [guía](evals/tareas_reales/check_booking/README.md#incorporación-explícita-y-revisión-del-evaluador)
+separa hashes, preparación, experimento y validación local posterior.
+
 La [tarea inspect-json](evals/tareas_reales/inspect_json/README.md) comenzó con un
 desarrollo mediante el adaptador sobre una copia. Su rechazo inicial se conserva:
 la [reevaluación](evals/tareas_reales/inspect_json/reevaluacion-2026-10-17.md) ajustó
@@ -227,10 +253,15 @@ La configuración versionada declara base, contrato, editable, evaluador, prompt
 referencias y límites. Es material de confianza del usuario, se congela antes del
 desarrollo y no contiene comandos ni opciones de permisos. Reutiliza el mismo
 motor y conserva los comandos históricos. Su preparación requiere regresión
-superada y fallos de aserción acreditados en aceptación. El hito se demuestra con
-dos tareas sintéticas y agentes simulados; no añade una tercera funcionalidad
-real ni incorpora candidatos automáticamente. El comando anterior invoca agentes
+superada y fallos de aserción acreditados en aceptación. La validación inicial del
+motor usó dos tareas sintéticas y agentes simulados; no incorpora candidatos
+automáticamente. El comando anterior invoca agentes
 reales si se ejecuta con Codex disponible.
+
+La [tarea 005 de disponibilidad de reservas](evals/tareas_reales/check_booking/README.md)
+recorrió después esa vía configurable real en dos intentos, con tres invocaciones
+de cuatro disponibles. Su entrega `check_booking.py` se incorporó explícitamente
+tras contrastar el experimento, sin modificar el motor ni reanudar la ejecución.
 
 El flujo `inspect-json` se comprobó inicialmente con agentes simulados y reproduce la base
 conocida del contrato 003,
@@ -286,7 +317,11 @@ añade los 17 métodos del evaluador por CLI y sus [controles permanentes](tests
 añaden las 17 comprobaciones con respuestas prefijadas, incluida equivalencia
 decimal exacta. Los adaptadores heredan las aserciones sin duplicarlas: cada
 método aparece individualmente en unittest y el exportador no se importa en el
-proceso de pruebas. No necesita ejecutar otra vez esos evaluadores por separado. Codex se
+proceso de pruebas. La [aceptación check-booking](tests/test_check_booking.py) y los
+[controles de su evaluador](tests/test_check_booking_evaluator.py) siguen el mismo
+patrón, con CLI hija y respuestas prefijadas, respectivamente. No importan el
+producto ni ejecutan suites durante el descubrimiento. No necesita ejecutar otra
+vez esos evaluadores por separado. Codex se
 simula con ejecutables temporales y parches; no se instala Codex, no se inicia
 sesión, no se usan credenciales personales ni se llama a modelos. La suite crea
 sus propios registros temporales y no depende de los registros locales de `runs/`.
@@ -372,6 +407,17 @@ las 286 de la base congelada; no acredita una ejecución remota de Actions.
 La [guía CSV](evals/tareas_reales/export_csv/README.md#incorporación-explícita-y-cobertura-permanente)
 identifica la evidencia local. Los cambios posteriores a esta validación son
 exclusivamente documentales.
+
+La incorporación explícita de **check-booking**, también el **19 de octubre de
+2026**, se validó con una única ejecución completa: **448 métodos correctos en
+215,223 s, Python 3.12.3, código 0**, sin fallos, errores ni omisiones. Incluye
+24 métodos de aceptación por CLI y 19 controles del evaluador, descubiertos una
+vez, además de las 405 identidades de la base congelada. La
+[guía de check-booking](evals/tareas_reales/check_booking/README.md#validación-local-de-la-incorporación)
+conserva los resultados enfocados anteriores, sus fallos de integración
+corregidos y la evidencia local separada. No se repitió la aceptación aparte ni
+hubo llamadas reales a agentes o ejecuciones de Actions; después solo cambió
+documentación.
 
 El descubrimiento se limita a `tests/`: los originales de `benchmark/` contienen
 defectos intencionados y no tienen que superar CI. La suite sigue evaluando sus

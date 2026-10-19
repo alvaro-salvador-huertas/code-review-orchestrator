@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "identificador": "check-booking",
+  "commit_base": "b54e352b3abba5a0075b512fdd84c0094cee44fa",
+  "contrato": "tasks/005-check-booking.md",
+  "archivo_editable": "check_booking.py",
+  "estado_inicial": "ausente",
+  "evaluador_aceptacion": "evals/tareas_reales/check_booking/evaluar.py",
+  "prompts": {
+    "desarrollador": "prompts/developer_check_booking_flow.md",
+    "revisor": "prompts/reviewer_check_booking_flow.md"
+  },
+  "referencias": [],
+  "limites_segundos": {
+    "desarrollador": 300,
+    "revisor": 300,
+    "aceptacion": 60,
+    "regresion": 600,
+    "inventario": 30,
+    "consulta_cli": 10
+  }
+}
