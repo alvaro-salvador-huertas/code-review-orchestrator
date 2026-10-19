@@ -148,6 +148,27 @@ datos ni convierten la consulta en incompleta. Los errores reales de lectura o
 sintaxis siguen generando incidencias y código 1. Texto conserva sus advertencias;
 los filtros se restauran al salir del ámbito, también ante una excepción.
 
+Para consultar resúmenes de `orchestrate_project.py` de las tareas `inspect-json`
+y `export-csv`, usa el [inspector de proyectos](docs/inspector-proyectos.md):
+
+```bash
+python3 -B inspect_project.py --run ruta/al/registro
+python3 -B inspect_project.py --run ruta/al/registro --format json > consulta_proyecto.json
+python3 -B export_runs.py consulta_proyecto.json
+```
+
+Lee **exclusivamente `resultado.json`**. Muestra procesos, evaluaciones, dictámenes,
+reservas y ubicaciones como datos registrados, sin abrir la evidencia referenciada.
+Una aprobación no es auditoría humana ni incorporación realizada. Su JSON usa la
+estructura exacta de exportación v1: **`ejecucion.caso` recibe `tarea` del resumen**,
+sin deducirla del directorio. Conserva desconocidos como `null`, emite un único
+objeto y mantiene stderr vacío con argumentos válidos. Sus códigos son 0 para
+consulta completada (incluso si la ejecución falló), 1 para resumen ausente,
+inválido, no admitido o incompleto, y 2 para argumentos incorrectos. Una consulta
+completada solo acredita lectura y validación del resumen, no integridad ni
+disponibilidad de sus referencias. La guía define los campos necesarios y los
+opcionales, incluidos los resúmenes guardados mientras el flujo está en curso.
+
 La [exportación CSV](evals/tareas_reales/export_csv/README.md) está incorporada
 localmente y usa solo biblioteca estándar:
 
@@ -202,8 +223,9 @@ regresión de la base y comprobaciones públicas de booleanos, duración grande 
 anidamiento. Una aprobación lo deja listo para revisión humana; no lo incorpora.
 Permite como máximo dos llamadas por rol, con reservas persistentes y sin
 reintentos técnicos. Conserva la validación histórica de `review_project.py` y
-añade una vía explícita para entregas nuevas. Sus registros requieren un lector
-JSON general: el esquema y el inspector integrado permanecen iguales.
+añade una vía explícita para entregas nuevas. Sus resúmenes se consultan con
+[`inspect_project.py`](docs/inspector-proyectos.md); el inspector del benchmark
+y sus contratos permanecen iguales.
 La [primera ejecución real](evals/tareas_reales/inspect_json/orquestacion-real-2026-10-18.md)
 acreditó una corrección automática tras pruebas fallidas y se detuvo por timeout
 del revisor, código 4, sin dictamen final ni incorporación.
