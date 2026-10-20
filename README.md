@@ -34,6 +34,27 @@ para reparar o revisar candidatos. Consulta la [guía y procedencia de la demo](
 
 ## Cómo funciona
 
+Existe una entrada independiente de
+[planificación por lenguaje natural](docs/planificacion-proyectos.md):
+
+```bash
+python3 -B plan_project.py "Descripción del trabajo que quiero realizar"
+```
+
+**Ese comando invoca un modelo cuando lo ejecutas expresamente**: una sesión
+nueva de solo lectura, máximo una invocación y 300 s. Produce un borrador JSON
+y Markdown con alcance, archivos, criterios, preguntas, supuestos y limitaciones.
+Puede pedir aclaraciones sin decidir por ti persistencia o interfaz.
+No inicia desarrollo, pruebas, revisión ni incorporación; un borrador sin
+preguntas tampoco es aprobación. El esquema de propuesta v1 es independiente
+de las configuraciones ejecutables del motor. La ayuda no invoca modelos.
+Este hito se ha comprobado con CLI y respuestas simuladas, no con un modelo real;
+la terminal autorizada del usuario superó **648 métodos**. Después se corrigieron
+dos errores de Unicode, con **34 pruebas enfocadas correctas**. El descubrimiento
+final encuentra **650 métodos**; la CI de la PR comprueba ese árbol posterior,
+separadamente de la validación local anterior. La guía conserva la procedencia
+y prepara un experimento semántico que todavía no se ha ejecutado.
+
 El controlador fija contrato y pruebas, evalúa la partida y encarga al
 desarrollador modificar una copia de `solution.py`. Después evalúa el candidato
 en otro proceso Python. Solo cuando supera las pruebas y su evidencia es válida
@@ -319,7 +340,7 @@ regular 0644. Procede de una corrección asistida de HEAD y una
 El experimento original sigue agotado, código 1, con dos desarrollos y dos
 revisiones; esta incorporación no lo convierte en un éxito de la orquestación.
 
-El descubrimiento habitual incluye **616 métodos**, con aceptación HTTP,
+El hito HTTP se validó con **616 métodos**, con aceptación HTTP,
 controles y fixtures del evaluador, y regresión de HEAD sobre bytes TCP crudos.
 La **validación conjunta local pasó sus 616 métodos**, sin fallos, errores ni
 omisiones, en la terminal autorizada del usuario: Python 3.12.3, código 0 y
