@@ -178,6 +178,12 @@ sys.exit(setting.get('exit_code', 0))
         self.assertNotIn('original/consulta.py', materials)
         self.assertEqual(materials['dependencias/util.py'], materials['original/dependencias/util.py'])
         self.assertEqual(json.loads(materials['resumen_evidencia.json'])['conjunto'], second['conjunto'])
+        for folder in ('materiales_sha256', 'evidencia_sha256'):
+            state = second['revision'][folder]
+            self.assertEqual(bundles.identity(state, self.selection.config), second['conjunto'])
+        for item in second['conjunto']['archivos']:
+            copied = second['revision']['evidencia_sha256']['evidencia/entrega/archivos/' + item['ruta']]
+            self.assertEqual(copied, {k: v for k, v in item.items() if k != 'ruta'})
         self.trace = {'naturaleza': 'simulación CLI; sin modelos', 'inicial': result['procedencia']['conjunto_inicial'],
             'intentos': [{k: e[k] for k in ('numero', 'partida_conjunto', 'conjunto', 'evaluaciones', 'transiciones')}
                          for e in result['intentos']], 'revision': second['revision'],

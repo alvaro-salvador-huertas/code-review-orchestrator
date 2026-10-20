@@ -629,6 +629,14 @@ def delivery_review_evidence(delivery_run, project_root, *, task=None):
                      "commit_base": reference.json("procedencia.json")["commit_base"],
                      "referencia_sha256": reference.state,
                      "evaluaciones": record["evaluaciones"]}
+    # validate_delivery ya cotejó este workspace con la base, la entrega y las
+    # evaluaciones. En las vías antiguas el archivo archivado podía tener otro
+    # modo: la autoridad es el workspace validado, no esa copia física.
+    names = cfg["editables"] if cfg.get("multiples") else (cfg["editable"],)
+    workspace = delivery.json("entrega/workspace_despues.json")
+    authorization["candidatos"] = {name: workspace[name] for name in names}
+    prefix = "evidencia/entrega/archivos/" if cfg.get("multiples") else "evidencia/entrega/"
+    authorization["copias_candidato"] = {prefix + name: name for name in names}
     if cfg.get("multiples"):
         authorization.update(conjunto=record["conjunto"], conjunto_sha256=record["conjunto_sha256"])
     else:

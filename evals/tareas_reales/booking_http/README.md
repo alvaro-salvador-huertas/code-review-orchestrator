@@ -1,11 +1,21 @@
-# Preparación de booking-http, tarea 007
+# Booking-http, tarea 007
+
+**Estado actual, 20 de octubre de 2026:** servidor incorporado por autorización
+explícita del usuario; **validación conjunta local de 616 métodos superada** en
+su terminal con loopback. Véanse [incorporación y cobertura permanente](#incorporación-autorizada-y-cobertura-permanente)
+y [validación local y publicación](#validación-conjunta-local-y-publicación-en-la-pr-16).
+La CI automática de la publicación se comprueba por separado. Los apartados
+anteriores a esa validación conservan la cronología, resultados y pendientes de
+cada etapa; sus comandos antiguos no son instrucciones de reejecución.
+
+## Preparación histórica
 
 **20 de octubre de 2026. Producto y ejecución de agentes pendientes.**
 Se preparan ocho archivos en `feat/tarea-api-reservas`, desde la base exacta
 `d6e576d9fe756604881c171693ca48e8d0d19a36`. `booking_http.py` sigue ausente;
 no se ha creado ni siquiera como fixture. No se ha ejecutado el orquestador.
 
-**Estado actual:** el usuario comunicó una ejecución correcta del fixture original
+**Estado de aquella preparación:** el usuario comunicó una ejecución correcta del fixture original
 desde su terminal habitual. Es evidencia aportada, separada de los errores de
 `PermissionError: [Errno 1] Operation not permitted` del entorno de Codex.
 La ampliación del plazo total y la corrección de trazas tienen controles prefijados
@@ -300,3 +310,318 @@ python3 -B orchestrate_project.py --task-config tasks/config/booking-http.json -
 **Comando no ejecutado.** La futura ejecución congelará otra vez los materiales y
 ejecutará aceptación y regresión iniciales completas; esta preparación no sustituye
 sus precondiciones. No hay candidato HTTP, incorporación, commit, push ni merge.
+
+## Corrección asistida de HEAD, 20 de octubre de 2026
+
+Esta actualización conserva los resultados anteriores como historia. Por
+instrucción explícita del usuario se prepara una **corrección asistida**, con
+registro independiente en `runs/20261020_booking-http_head_correccion_asistida/`.
+No continúa el experimento agotado ni representa una reparación autónoma del
+flujo. La orquestación
+`20261020T130836Z_booking-http_orchestrate_73c8e492ac9c412d92ab8a8277b315d4`
+conserva `intentos_agotados`, código 1, dos desarrollos y dos revisiones.
+La revisión del cambio y la decisión de incorporación siguen pendientes.
+
+Se parte exactamente de
+`intentos/2/evidencia/entrega/archivos/booking_http.py` de esa orquestación,
+regular 0644, SHA-256
+`623105148632a048428cf5c26e70ec304ee58b49facacd4faceb64993e963413`.
+La captura TCP en
+`runs/20261020_booking-http_contraste_local/head_terminal/resultado.json`
+es **una ejecución aportada por el usuario**: ambos HEAD largos recibieron 414
+y 46 bytes efectivos de cuerpo, terminaron en EOF y permitieron después
+GET `/health` con 200. No se repite aquí la ejecución del candidato anterior.
+El defecto acreditado es el cuerpo en HEAD; no se añade un defecto por 414
+frente a 404 ni se amplía el contrato.
+
+La entrega nueva está en
+`runs/20261020_booking-http_head_correccion_asistida/entrega/booking_http.py`,
+regular **0644**, SHA-256
+`4bd8b1a50906672d576e9fc29cb7984d3665c74e71df976cccfec432ce516bf5`.
+El diff solo cambia `handle` y la condición de escritura en `_reply`:
+reconoce el método exacto `HEAD ` en cinco bytes antes de los errores tempranos
+y conserva esa información aunque `parse_request` reinicie `command`.
+La segunda lectura completa el mismo máximo de 65.537 bytes, respetando una
+línea corta ya terminada. HEADX, HEADER y `head` no se confunden con HEAD.
+Se mantienen estados, cabeceras, cierre, rutas, límites y delegación al núcleo.
+La corrección pendiente del controlador sobre permisos de revisión es otro
+cambio; sus archivos y su validación previa se conservan sin modificaciones.
+
+Comprobaciones realizadas por el asistente con Python 3.12.3:
+
+| Comprobación | Resultado real |
+| --- | --- |
+| Lectura completa y comparación AST fuera de `handle`/`_reply` | Resto del candidato idéntico; núcleo y autoridades intactos |
+| 26 casos con flujos en memoria | Correctos; código 0; 0,065 s. No son una reproducción TCP |
+| TCP enfocado sobre copia temporal nueva | Bloqueado al crear el socket: `Operation not permitted`; código 2; cero peticiones; hijo recogido; 0,166 s exteriores |
+| Aceptación congelada, 30 identidades exactas, una sesión | 3 métodos correctos, 27 con errores (28 errores contando subcasos), cero fallos de aserción y cero omisiones; código 1; 2,532 s de unittest |
+| Regresión congelada, 530 métodos | Pendiente: no se ejecuta sin TCP y aceptación correctos |
+
+Los errores de aceptación corresponden a la restricción de sockets: 25
+servidores terminaron sin anuncio y fueron recogidos; el caso de puerto ocupado
+falló al crear el socket y las dos sondas de bind no llegaron a generar su
+archivo de dirección. Los stderr de los hijos conservan la denegación.
+Se registraron 37 procesos en aceptación y cero peticiones HTTP. Ayuda,
+argumentos inválidos e importación sin efectos sí pasaron. No se presenta esta
+aceptación como superada ni esos errores como defectos nuevos del producto.
+Los temporales se eliminaron. La regresión de **534** métodos del árbol actual,
+acreditada al corregir el controlador, no se ha repetido.
+
+Desde la raíz del repositorio, este único comando completa la validación
+pendiente en la terminal del usuario con loopback autorizado:
+
+```bash
+python3 -B runs/20261020_booking-http_head_correccion_asistida/validar.py --output runs/20261020_booking-http_head_correccion_asistida/validacion_terminal --ejecutor usuario
+```
+
+Exige una salida nueva y verifica hashes y modos antes de copiar. La prueba TCP
+adicional usa 127.0.0.1 y puerto 0, conserva peticiones/respuestas crudas,
+errores de envío, EOF/resets y tiempos; sigue recibiendo tras un error de envío.
+Cubre ambos HEAD largos, HEAD ordinario a `/health` y `/otra`, GET largo,
+controles HEADX/`head` y recuperación con GET `/health`, en HTTP/1.0 y HTTP/1.1.
+No utiliza un lector que descarte cuerpos HEAD ni deduce su ausencia de
+Content-Length. Son 30 intercambios previstos, distintos de los 30 métodos
+de aceptación.
+
+El comando ejecuta la aceptación congelada y, solo si las dos comprobaciones
+pasan, **una** regresión de la base congelada con 530 identidades. Usa copias
+temporales, entorno `evaluation`, plazos de 120/180/600 s, recogida de hijos y
+terminación del grupo ante timeout o interrupción. Conserva canales, códigos,
+inventarios de métodos, trazas y SHA-256, sin cambiar `network_access=false`.
+`diagnostico.txt`, `entrega.json`, `cambio.diff`, `memoria_resultado.json` y
+`validacion_local/` distinguen procedencia, comprobaciones y pendientes.
+El servidor sigue ausente de la raíz; no se invocaron modelos, agentes ni
+la orquestación, y no hay commit, push ni merge.
+
+## Reanálisis de la sonda adicional y aceptación reutilizada
+
+**20 de octubre de 2026.** El usuario ejecutó el comando anterior a las
+14:46:39 UTC. Su registro `validacion_terminal/` conserva **código 1**:
+la sonda adicional marcó dos falsos negativos, aunque la aceptación congelada
+pasó sus **30 métodos**, sin fallos, errores ni omisiones (6,854 s de unittest).
+Ese registro y la sonda original permanecen intactos.
+
+El contraste y la versión corregida de la sonda se guardan por separado en
+`runs/20261020_booking-http_sonda_reanalisis_regresion/`. Se verificaron las
+132 entradas del manifiesto de la ejecución del usuario, los binarios de las
+30 peticiones y respuestas, sus hashes, tamaños y representaciones hexadecimales.
+Los únicos indicadores falsos eran `allow` en HEAD `/health`, para HTTP/1.0 y
+HTTP/1.1. Ambas respuestas contienen **`Allow: GET`**, con cuerpo vacío y EOF,
+y tienen SHA-256
+`a7820efa154f5592c6856edae4f24080aa8b41ea03f50cf94bed42121ecbe074`.
+La sonda buscaba literalmente `allow: GET` distinguiendo mayúsculas del nombre.
+
+La sonda nueva analiza el nombre sin distinguir mayúsculas y conserva la
+comparación exacta del valor `GET`. También retira la exigencia adicional de
+`Connection: close`, manteniendo el cierre observado mediante EOF/reset:
+el contrato no exige esa cabecera literal. Esta segunda exigencia **no causó
+el fallo actual**; era verdadera en las 30 capturas y todas registraron EOF.
+
+Los cuatro métodos de controles pequeños pasaron: `Allow`, `allow` y `aLlOw`
+con `GET` se aceptan; ausencia, `POST` y `get` se rechazan. Cierre sin cabecera
+se acepta y cabecera sin cierre se rechaza. La comprobación `allow` se conserva.
+
+El **reanálisis sin sockets** dio **30/30 casos correctos**, con código 0:
+es una nueva interpretación de la ejecución TCP del usuario, sin nuevas
+peticiones y sin modificar el resultado histórico. Los cuatro HEAD largos
+(dos rutas por versión) tienen cero bytes efectivos de cuerpo; GET largo
+conserva 46 bytes. HEAD ordinario, controles de método, los 30 EOF y las
+recuperaciones mediante GET `/health` también corresponden. `reanalisis.json`
+conserva comprobaciones anteriores y nuevas, hashes, cabeceras y eventos,
+separando tiempos de transporte originales y tiempo de reanálisis.
+
+Se **reutiliza la aceptación del usuario**, sin repetirla: se cotejaron sus
+30 identidades, sesión completa, subtests, códigos, comandos, trazas y hashes.
+`aceptacion_reutilizada.json` acredita la correspondencia con el candidato
+regular 0644 de SHA-256
+`4bd8b1a50906672d576e9fc29cb7984d3665c74e71df976cccfec432ce516bf5`
+y el evaluador congelado
+`c7a6f6a64ebe1a89be04643f955cd122ac2bb693fbf55115e45eae9e02ffa525`.
+Las copias temporales originales ya se eliminaron; el cotejo actual utiliza
+los scripts, identidades, informes y trazas conservados.
+
+La nueva regresión se registra aparte en `regresion_verificada.json`, con
+canales e informe en `regresion/`. Parte de otra copia temporal de los 138
+archivos de la base congelada `d6e576d9fe756604881c171693ca48e8d0d19a36`,
+cotejados contra su procedencia, y añade únicamente el candidato exacto.
+Usa runner y entorno `evaluation` congelados, límite 600 s, un marcador que
+impide repetirla accidentalmente y cotejo de las **530 identidades**.
+No ejecuta de nuevo TCP, aceptación ni la regresión de 534 del controlador.
+
+**Resultado de la nueva regresión:** una ejecución, **530 métodos correctos**
+y 2.792 subtests superados, cero fallos, errores u omisiones, código 0.
+Duración unittest: **273,541 s**; proceso exterior: 273,777 s, dentro de 600 s.
+Las identidades y terminaciones coinciden exactamente con el inventario
+congelado. Copia, candidato y referencia intactos; temporal eliminado.
+
+Queda completada la validación de la corrección asistida mediante controles
+de sonda, reanálisis de TCP del usuario, aceptación reutilizada y nueva regresión.
+`resultado.json`, `diagnostico.txt` y `SHA256SUMS` del registro nuevo reúnen
+procedencia, resultados y conservación. No apareció otra discrepancia.
+El candidato y los cambios pendientes del controlador permanecen intactos,
+igual que los históricos: `intentos_agotados`, código 1, dos desarrollos
+y dos revisiones. Siguen pendientes **la revisión del cambio del producto y
+la decisión explícita de incorporación**. No hay servidor en raíz, nuevas
+invocaciones de agentes, orquestación, commit, push ni merge.
+
+La [revisión automática asistida por Codex del 20 de octubre de 2026](contraste-correccion-asistida-2026-10-20.md)
+contrasta el candidato completo, el contrato y la evidencia conservada, sin
+ejecutar el producto ni repetir pruebas. No identifica incumplimientos concretos
+y recomienda preparar la incorporación del hash exacto
+`4bd8b1a50906672d576e9fc29cb7984d3665c74e71df976cccfec432ce516bf5`,
+regular 0644, con los límites documentados. La decisión de incorporación sigue
+pendiente; esta recomendación no cambia el resultado del experimento agotado.
+
+## Incorporación autorizada y cobertura permanente
+
+**20 de octubre de 2026.** Tras la revisión anterior, el usuario autoriza incorporar
+exactamente la entrega corregida. [booking_http.py](../../../booking_http.py)
+ya existe en la raíz como archivo regular **0644**, SHA-256
+`4bd8b1a50906672d576e9fc29cb7984d3665c74e71df976cccfec432ce516bf5`.
+El destino estaba ausente; se copiaron los bytes autorizados y se comprobaron
+hash, tipo y modo antes y después. El origen
+`runs/20261020_booking-http_head_correccion_asistida/entrega/booking_http.py`
+permanece intacto. No se aplica otra corrección del producto.
+
+Es una **incorporación explícita de una corrección asistida bajo instrucciones
+del usuario**, posterior al experimento agotado. El registro original conserva
+`intentos_agotados`, código 1, dos desarrollos y dos revisiones. No se reanuda
+ese flujo ni se atribuye esta entrega al éxito de su orquestación. La corrección
+pendiente de identidad y permisos del controlador se conserva.
+
+Uso local, desde la raíz:
+
+```bash
+python3 -B booking_http.py --port 8000
+```
+
+Solo enlaza IPv4 `127.0.0.1`. `--port 0` permite asignación del sistema; la única
+línea de stdout anuncia el host y puerto efectivo después de enlazar. GET
+`/health` devuelve `{"estado": "ok"}`. POST `/availability`, con Content-Type
+JSON y Content-Length, recibe el documento de solicitud y reservas descrito en
+el [contrato 007](../../../tasks/007-booking-http.md) y delega en
+`booking_core.check_booking`. No persiste reservas. Cada respuesta cierra la
+conexión; HEAD conserva el estado y las cabeceras correspondientes sin enviar
+cuerpo, incluidos los errores tempranos. Ctrl+C recoge el servidor.
+
+La cobertura permanente usa entradas sintéticas, sin depender de `runs/` ni
+ejecutar candidatos históricos. Los evaluadores y contratos congelados no cambian:
+
+| Adaptador o regresión | Métodos descubiertos |
+| --- | ---: |
+| [Aceptación HTTP](../../../tests/test_booking_http.py), herencia íntegra de la aceptación | 30 |
+| [Controles del evaluador](../../../tests/test_booking_http_evaluator.py), aserciones originales | 42 |
+| Fixtures del mismo adaptador, incluidos los dos del plazo total | 3 |
+| [Regresión HEAD](../../../tests/test_booking_http_head.py), HTTP/1.0 y HTTP/1.1 | 2 |
+| Controles simulados del transporte de esa regresión | 5 |
+
+Los adaptadores siguen el precedente de booking-core y restauran el alias temporal
+`evaluar` al importar los controles. Cada método heredado se descubre por separado.
+La regresión HEAD usa el arranque y la recogida del evaluador, exclusivamente
+127.0.0.1 y puerto 0, y un intercambio concurrente con plazo total de 5 s y
+respuesta acotada. Conserva bytes recibidos aunque falle el envío, exige EOF o
+reset y valida una respuesta completa; no exige una cabecera literal
+`Connection: close`. El analizador solo interpreta cabeceras y conserva el cuerpo
+crudo, sin ocultarlo por tratarse de HEAD.
+
+Por versión se prueban HEAD ordinario a salud y a ruta desconocida, dos rutas
+largas de 70.000 y 70.001 caracteres, y GET/HEADX/`head` largos como controles con
+cuerpo JSON obligatorio. Una consulta de salud inicial y otra tras cada caso
+comprueban recuperación: **30 intercambios previstos**, distribuidos en dos
+métodos. Los contextos cierran los clientes y recogen los hijos aun ante fallos.
+Los cinco controles sin sockets verifican nombres de Allow equivalentes, valor
+exacto GET, cierre sin cabecera, rechazo de cabecera sin cierre, datos tras un
+error de envío/reset y rechazo de respuestas incompletas o de un cuerpo HEAD.
+
+Comprobaciones efectivamente realizadas por Codex, con Python **3.12.3**, `-B`
+y entorno `evaluation`:
+
+- **42 controles del evaluador correctos**, código 0, 0,273 s de unittest.
+- **5 controles de transporte simulado correctos**, código 0, 0,012 s.
+- Descubrimiento sin ejecutar métodos ni importar el producto: **616 identidades
+  únicas**; correspondencia exacta de los tres grupos heredados y alias global
+  restaurado. Son los 534 métodos anteriores y 82 incorporados.
+
+El primer script de inventario falló con `KeyError`: buscaba el comprobador en
+`sys.modules`, de donde el contexto de importación lo había retirado correctamente.
+Se conservan esa versión y sus canales; el inventario corregido consulta el
+módulo retenido por el adaptador. Solo se repitió el descubrimiento, sin repetir
+los 47 controles aprobados. No fue un fallo del producto ni de los adaptadores.
+No se han intentado conexiones ni ejecutado aquí la aceptación, los fixtures o
+la regresión HEAD con sockets.
+
+El registro nuevo, excluido de Git, es
+`runs/20261020_booking-http_incorporacion_integrada/`. Conserva procedencia,
+estado previo, comandos, Python, stdout/stderr, códigos, tiempos, inventario,
+identidades y hashes. La aceptación congelada de **30 métodos**, el reanálisis
+de **30 capturas de la ejecución TCP del usuario**, la regresión congelada
+posterior de **530 métodos** y la regresión previa del controlador de **534**
+se conservan como validaciones separadas. Ninguna acredita todavía la suite
+conjunta integrada.
+
+Desde la raíz, ejecutar **una sola vez** en la terminal autorizada con loopback:
+
+```bash
+python3 -B runs/20261020_booking-http_incorporacion_integrada/validar_integracion.py
+```
+
+Ese comando comprueba la identidad del árbol preparado y del candidato, reserva
+una salida nueva `validacion_terminal/` y ejecuta exactamente una vez
+`python3 -B -m unittest discover -s tests -v`, con el intérprete absoluto,
+entorno `evaluation` y límite de **600 s**. Registra ambos canales, código,
+versión de Python, identidades ejecutadas y hashes; coteja las 616 identidades
+y la conservación del árbol y del origen. Recoge el proceso y mata su grupo
+ante timeout o interrupción. Si el árbol cambió, se detiene antes de lanzar
+pruebas; si ya existe la salida, no la reutiliza ni repite la suite.
+
+**Validación conjunta pendiente: no se presenta como superada.** Se requiere
+examinar ese resultado antes de dar por validada la integración. No se modifica
+la configuración de red ni se repiten aquí las suites anteriores. No hay nuevas
+llamadas al modelo, agentes, orquestación, commit, push ni merge.
+
+## Validación conjunta local y publicación en la PR #16
+
+El usuario ejecutó desde su terminal autorizada el comando preparado:
+`python3 -B runs/20261020_booking-http_incorporacion_integrada/validar_integracion.py`.
+Este lanzó una sola vez `python3 -B -m unittest discover -s tests -v`, mediante
+`/usr/bin/python3`, con Python **3.12.3**, entorno `evaluation` y límite de 600 s.
+La ejecución transcurrió el 20 de octubre de 2026, de **16:07:51 a 16:13:17 UTC**.
+
+**Resultado local: 616 métodos correctos, código 0, sin fallos, errores ni
+omisiones; 325,413 s de unittest y 325,783 s exteriores.** Es una ejecución
+aportada por el usuario, no una ejecución de sockets realizada por Codex.
+Incluye aceptación HTTP, controles y fixtures del evaluador, regresión HEAD
+y pruebas del controlador sobre el árbol integrado.
+
+Antes de publicar se cotejaron las cinco entradas del manifiesto de
+`runs/20261020_booking-http_incorporacion_integrada/validacion_terminal/`,
+los canales completos, el informe y el inventario. Las **616 identidades
+ordenadas** coinciden; stdout está vacío y stderr termina en `OK`.
+Los **151 archivos** del árbol preparado coinciden con los evaluados, incluido
+el candidato regular 0644 de hash
+`4bd8b1a50906672d576e9fc29cb7984d3665c74e71df976cccfec432ce516bf5`.
+Árbol, candidato y origen se conservaron durante la ejecución. Después solo
+se actualiza documentación de estado; código, pruebas y dependencias permanecen
+idénticos. Se reutiliza esta validación sin repetir suites locales.
+
+La publicación autorizada en la
+[PR #16](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/16)
+reúne HTTP local sobre `booking_core`, la corrección asistida de HEAD, la
+[conservación de identidad y permisos al revisar](../../../docs/orquestacion-proyectos.md#identidad-de-las-copias-de-revisión)
+y su cobertura permanente. Conserva los materiales de preparación ya publicados.
+Los registros privados siguen excluidos de Git; la evidencia de contraste y
+publicación se guarda en `runs/20261020_booking-http_publicacion_pr16/`.
+
+La CI automática es una validación distinta, todavía no ejecutada para esta
+publicación al preparar el commit. Se comprobarán su comando, Python, resultado,
+las 616 identidades y el commit probado en Actions frente a la cabecera de la PR.
+El checkout temporal de `refs/pull/16/merge`, si se utiliza, comprueba una
+combinación con la base y **no constituye una fusión real**. El resultado y la
+ejecución concreta quedarán vinculados en la PR; no se inicia un workflow manual.
+
+El experimento original sigue agotado, con dos desarrollos y dos revisiones.
+La corrección asistida posterior, la reparación del controlador, la regresión
+congelada de 530, la anterior del controlador de 534, esta validación local de
+616 y la CI de publicación son etapas distintas. No se reescriben sus resultados
+ni se atribuye el producto corregido al éxito del experimento original.
+No se autoriza merge ni auto-merge.
