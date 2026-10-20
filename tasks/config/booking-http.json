@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "identificador": "booking-http",
+  "commit_base": "d6e576d9fe756604881c171693ca48e8d0d19a36",
+  "contrato": "tasks/007-booking-http.md",
+  "archivos_editables": [
+    {"ruta": "booking_http.py", "estado_inicial": "ausente"}
+  ],
+  "evaluador_aceptacion": "evals/tareas_reales/booking_http/evaluar.py",
+  "prompts": {
+    "desarrollador": "prompts/developer_booking_http_flow.md",
+    "revisor": "prompts/reviewer_booking_http_flow.md"
+  },
+  "referencias": ["booking_core.py", "tasks/005-check-booking.md", "tasks/006-booking-core.md"],
+  "limites_segundos": {
+    "desarrollador": 300,
+    "revisor": 300,
+    "aceptacion": 180,
+    "regresion": 600,
+    "inventario": 30,
+    "consulta_cli": 10
+  }
+}

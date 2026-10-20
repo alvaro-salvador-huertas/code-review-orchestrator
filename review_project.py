@@ -252,6 +252,7 @@ def validate_evidence(development_run, reevaluation_run, project_root=PROJECT):
                          "resultado_original": p["resultado_origen"], "commit_base": base["commit_base"],
                          "head_origen": base["head_origen"], "sha256": hashes,
                          "evaluaciones_nuevas": r["evaluaciones_nuevas"], "regresion_reutilizada": reused,
+                         "candidatos": {"inspect_run.py": after}, "copias_candidato": {},
                          "motivo": "Aceptación revisada completa sobre la misma entrega; rechazo original conservado."}
         materials = {"contrato.md": contract, "inspect_run.py": candidate, "original/inspect_run.py": original,
                      "candidato.diff": diff, "evaluacion/evaluador_anterior.py": old,
@@ -589,6 +590,25 @@ def run_isolated_review(orchestration_run, attempt, operation_id, project_root=P
                        preparation="Validando intento explícito y evidencia de la orquestación cerrada.")
 
 
+def candidate_review_copies(authorization, editable):
+    """Identidades ya validadas; nunca inferir modos de las copias nuevas."""
+    names = editable if isinstance(editable, tuple) else (editable,)
+    candidates = {name: dict(item) for name, item in authorization["candidatos"].items()}
+    require(set(candidates) == set(names) and all(item["tipo"] == "archivo" for item in candidates.values()),
+            "Identidad de candidatos distinta de la selección autorizada")
+    copies = dict(candidates)
+    for target, name in authorization["copias_candidato"].items():
+        require(name in candidates and target not in copies, "Copia de candidato sin procedencia")
+        copies[target] = candidates[name]
+    return candidates, copies
+
+
+def check_candidate_copies(state, expected):
+    """tree_state incluye ruta, tipo regular, hash de contenido y modo."""
+    for name, item in expected.items():
+        require(state.get(name) == item, f"Copia de candidato distinta de la identidad validada: {name}")
+
+
 def _run_review(load_evidence, select_materials, prompt_path, project_root, *, progress=None, on_invoke=None,
                 preparation="Validando desarrollo, reevaluación y regresión histórica.", operation=None,
                 task="inspect-json", editable="inspect_run.py", review_timeout=None):
@@ -618,13 +638,15 @@ def _run_review(load_evidence, select_materials, prompt_path, project_root, *, p
     try:
         notify(preparation)
         evidence, authorization, sources = load_evidence()
+        result["evidencia_previa_valida"] = True
+        candidates, candidate_copies = candidate_review_copies(authorization, editable)
         materials, selection = select_materials(evidence, authorization)
+        require(candidates.keys() <= materials.keys(), "Faltan candidatos en los materiales de revisión")
         if authorization.get("tipo") == "orquestacion_configurable_v2":
             result.update(tipo="revision_conjunto_configurable_v2", conjunto_revisado=authorization["conjunto"],
                           conjunto_sha256=authorization["conjunto_sha256"])
         require(all(source.path != root / "runs" and source.path not in (root / "runs").parents for source in sources),
                 "El registro nuevo quedaría dentro de una entrada")
-        result["evidencia_previa_valida"] = True
         original_state = tree_state(root, filter_local=True)
         prompt = read_regular(prompt_path)
         require(prompt is not None and prompt.strip(), "Faltan las instrucciones específicas")
@@ -666,14 +688,22 @@ def _run_review(load_evidence, select_materials, prompt_path, project_root, *, p
             target = full_archive / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+            if name in candidate_copies:
+                target.chmod(candidate_copies[name]["modo"])
         evidence_state = tree_state(full_archive)
+        check_candidate_copies(evidence_state, candidate_copies)
         write_json(log / "seleccion.json", selection)
         selection_bytes = (log / "seleccion.json").read_bytes()
         for name, data in materials.items():
             target = archive / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+            if name in candidate_copies:
+                target.chmod(candidate_copies[name]["modo"])
         archived = tree_state(archive)
+        selected_candidates = {name: item for name, item in candidate_copies.items()
+                               if name in materials or name in candidates}
+        check_candidate_copies(archived, selected_candidates)
         result["materiales_sha256"] = archived
         result["evidencia_sha256"] = evidence_state
         result["contexto"] = {"version": 2, "archivos": len(materials), "bytes": sum(map(len, materials.values())),
@@ -685,9 +715,17 @@ def _run_review(load_evidence, select_materials, prompt_path, project_root, *, p
             shutil.copytree(archive, workspace)
             final = Path(temporary) / "respuesta.json"
             def check():
-                result["integridad"] = {"workspace_intacto": tree_state(workspace) == archived,
-                                         "materiales_intactos": tree_state(archive) == archived,
-                                         "evidencia_completa_intacta": tree_state(full_archive) == evidence_state,
+                workspace_state, materials_state, full_state = (tree_state(workspace), tree_state(archive),
+                                                                 tree_state(full_archive))
+                if not result["reserva_invocacion"]:
+                    # Antes del adaptador y de reservar: contrastar con la fuente,
+                    # no solo dos copias que podrían compartir la misma alteración.
+                    check_candidate_copies(workspace_state, selected_candidates)
+                    check_candidate_copies(materials_state, selected_candidates)
+                    check_candidate_copies(full_state, candidate_copies)
+                result["integridad"] = {"workspace_intacto": workspace_state == archived,
+                                         "materiales_intactos": materials_state == archived,
+                                         "evidencia_completa_intacta": full_state == evidence_state,
                                          "seleccion_intacta": read_regular(log / "seleccion.json") == selection_bytes,
                                          "original_intacto": tree_state(root, filter_local=True) == original_state,
                                          "origenes_intactos": all(s.unchanged() for s in sources),

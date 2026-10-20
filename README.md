@@ -300,6 +300,39 @@ La [guía](evals/tareas_reales/booking_core/README.md#incorporación-local-y-uso
 incluye un ejemplo con conflicto, hashes y evidencia. No añade HTTP, persistencia
 ni dependencias, y este recorrido no establece fiabilidad general.
 
+La [tarea 007 booking-http](evals/tareas_reales/booking_http/README.md#incorporación-autorizada-y-cobertura-permanente)
+ya tiene el servidor incorporado localmente, por autorización explícita:
+
+```bash
+python3 -B booking_http.py --port 8000
+```
+
+Escucha exclusivamente en `127.0.0.1`; `--port 0` asigna un puerto libre y anuncia
+host y puerto mediante una línea JSON. GET `/health` devuelve `{"estado": "ok"}`;
+POST `/availability` recibe el documento JSON del núcleo y delega en
+`booking_core.check_booking`. Cierra cada conexión y no almacena reservas.
+
+El hash incorporado es
+`4bd8b1a50906672d576e9fc29cb7984d3665c74e71df976cccfec432ce516bf5`,
+regular 0644. Procede de una corrección asistida de HEAD y una
+[revisión automática asistida por Codex](evals/tareas_reales/booking_http/contraste-correccion-asistida-2026-10-20.md).
+El experimento original sigue agotado, código 1, con dos desarrollos y dos
+revisiones; esta incorporación no lo convierte en un éxito de la orquestación.
+
+El descubrimiento habitual incluye **616 métodos**, con aceptación HTTP,
+controles y fixtures del evaluador, y regresión de HEAD sobre bytes TCP crudos.
+La **validación conjunta local pasó sus 616 métodos**, sin fallos, errores ni
+omisiones, en la terminal autorizada del usuario: Python 3.12.3, código 0 y
+325,413 s de unittest. Se cotejaron canales, identidades y hashes con el árbol
+integrado; no se repite por esta actualización documental.
+La regresión congelada de 530 métodos y la anterior de 534 del controlador
+siguen siendo validaciones separadas. La corrección del controlador conserva
+la identidad y los permisos validados del candidato al preparar una revisión.
+La [PR #16](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/16)
+reúne ambos cambios; su CI automática se comprueba por separado sobre el commit
+publicado y no se deduce del resultado local. Se conservan las autoridades
+congeladas y `network_access=false`.
+
 El flujo `inspect-json` se comprobó inicialmente con agentes simulados y reproduce la base
 conocida del contrato 003,
 aunque `main` ya tenga JSON. Cada candidato debe superar aceptación revisada,

@@ -196,6 +196,10 @@ sys.exit(setting.get('exit_code', 0))
                 self.assertEqual(set(entry["evaluaciones"]), {"aceptacion", "regresion"})
                 self.assertEqual(entry["revision"]["dictamen_modelo"]["decision"], "aprobar")
                 delivery = Path(entry["registro"])
+                name = config["archivo_editable"]
+                expected = json.loads((delivery / "entrega/workspace_despues.json").read_text())[name]
+                self.assertEqual(entry["revision"]["materiales_sha256"][name], expected)
+                self.assertEqual(entry["revision"]["evidencia_sha256"]["evidencia/entrega/" + name], expected)
                 self.assertEqual((delivery/"entrega"/config["archivo_editable"]).read_text(), self.good(task))
                 self.assertEqual((delivery/"entrega/partida.py").exists(), config["estado_inicial"] == "existente")
                 calls = [c for c in self.calls_read() if c["tarea"] == task]

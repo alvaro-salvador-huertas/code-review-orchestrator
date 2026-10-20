@@ -92,6 +92,30 @@ aislada descrita a continuación tiene presupuesto propio y no reanuda el flujo.
 El runner histórico permanece intacto; `project_flow_runner.py` añade el registro
 de subtests y la salida externa de las comprobaciones públicas para el flujo nuevo.
 
+### Identidad de las copias de revisión
+
+La preparación conserva los modos del candidato desde el workspace cuya
+identidad ya validaron `validate_evidence` o `validate_delivery`. Esa procedencia
+se transporta en la autorización interna junto con las rutas de sus copias.
+No se exige un campo nuevo en registros antiguos ni se toma el modo de una
+copia recién creada como autoridad. En v2, el workspace validado corresponde
+al conjunto completo de rutas, hashes, tipos y modos.
+
+`_run_review` restaura esos modos después de escribir el candidato en
+`materiales/`, en `evidencia_validada/` y en las copias de la entrega actual
+incluidas dentro de esta última. Los archivos ajenos al candidato conservan la
+política de creación anterior. Después de `copytree`, el controlador coteja
+por separado los candidatos de materiales, evidencia y workspace contra la
+identidad validada: ruta, archivo regular, SHA-256 y modo deben coincidir.
+Repite el cotejo al reservar, antes de consumir la invocación. Mantiene además
+las comprobaciones de integridad durante la revisión.
+
+Una discrepancia de preparación termina como `fallo_controlador`, código 8,
+sin dictamen ni reserva. Si se detecta antes de entrar en `invoke_reviewer`,
+el adaptador no se llama. Las reservas y presupuestos de las vías histórica,
+aislada y configurable siguen siendo los mismos; una alteración después de
+iniciar la revisión conserva el tratamiento de integridad existente.
+
 ## Revisión aislada de una entrega terminada
 
 `review_project.py` admite otro modo explícito:
@@ -337,3 +361,96 @@ siguen pendientes de corrección en la entrega experimental. No hay aprobación
 del recorrido ni incorporación. Las pruebas simuladas verifican el mecanismo
 del flujo; el experimento real muestra sus resultados y límites en esta tarea
 conocida. Ninguno sustituye la decisión humana de incorporación.
+
+## Corrección de materiales y contraste booking-http, 20 de octubre de 2026
+
+El primer experimento booking-http terminó con `intentos_agotados`, código 1,
+dos desarrollos y dos revisiones. Sus entregas originales son regulares 0644;
+las copias para ambos revisores quedaron 0664 con los mismos bytes. La escritura
+mediante `write_bytes` y posterior `copytree` reproduce esa pérdida de modo.
+Una umask 0002 en un proceso hijo es una condición suficiente demostrada;
+**no acredita la umask histórica**. El primer hallazgo de permisos describía
+la copia preparada por el controlador y no un defecto de permisos del
+desarrollador. La corrección anterior se aplica a revisiones nuevas y deja
+intactos los registros originales.
+
+Los dos candidatos son idénticos: 8.314 bytes, SHA-256
+`623105148632a048428cf5c26e70ec304ee58b49facacd4faceb64993e963413`.
+El diff del segundo contra el primero está vacío. El mecanismo de HEAD señalado
+en la segunda revisión ya estaba en el primero.
+
+La **ejecución TCP aportada por el usuario** está en
+`runs/20261020_booking-http_contraste_local/head_terminal/resultado.json`,
+fechada `2026-10-20T14:03:26.835035+00:00`. Ejecutó
+`reproducir_head.py --output .../head_terminal` sobre una copia temporal del
+candidato exacto, con Python 3.12.3, `127.0.0.1` y `--port 0`.
+Ambos HEAD largos recibieron 414 y **46 bytes efectivos de cuerpo**; ambos
+terminaron en EOF. Los controles HEAD ordinarios carecieron de cuerpo y
+GET `/health` posterior respondió 200. No se observó reset en esa captura.
+
+Codex ha leído las respuestas binarias y comprobado sus hashes y longitudes;
+**no ha repetido esa ejecución TCP**. El intento anterior de Codex quedó bloqueado
+al abrir sockets y se conserva como tal. El defecto del producto sigue pendiente:
+la respuesta por línea excesiva se genera con `self.command = None`, antes de
+identificar HEAD, y termina escribiendo el cuerpo. Este paso no modifica ni
+incorpora `booking_http.py`, ni cambia el contrato o los límites del analizador.
+
+La prueba automatizada de preparación falló antes de la corrección: **1 método,
+3 subtests fallidos, código 1**. Detectó el cambio 0644 → 0664 bajo umask 0002
+y la pérdida del modo ejecutable 0755 en conjuntos de varios archivos bajo
+0022 y 0002. Tras la corrección, los cuatro métodos iniciales de
+[identidad de revisión](../tests/test_review_candidate_identity.py) pasaron.
+Usan procesos hijos con umask explícita y revisores simulados; las alteraciones
+de modo, contenido, ruta y tipo antes de lanzar se rechazan sin llamar al
+adaptador ni reservar. También se comprueban copias alteradas antes de inventariar,
+para evitar que dos copias igualmente erróneas se validen entre sí.
+
+La evidencia de este cambio está separada en
+`runs/20261020_review_candidate_identity_fix/`: comandos, cwd, versión,
+stdout/stderr, códigos, duraciones, el fallo inicial real, contraste de lectura
+del TCP aportado e inventarios históricos antes/después. Es evidencia local
+excluida de Git. Las pruebas de integración crean sus propios registros
+temporales y agentes simulados; no relanzan el experimento ni llaman a modelos.
+
+Validación realizada por Codex con Python **3.12.3**, separada de la ejecución
+TCP del usuario:
+
+| Comprobación | Métodos | Resultado | Duración unittest |
+| --- | ---: | --- | ---: |
+| Reproducción antes del cambio, `test_umask` | 1 | 3 subtests fallidos, código 1 | 0,417 s |
+| Nuevas pruebas de preparación tras el cambio | 4 | Correctas, código 0 | 0,874 s |
+| Preparación, revisión histórica/aislada y configuración v1/v2 | 77 | Correctas, código 0 | 90,658 s |
+| Única regresión completa final | 534 | Correctas, código 0 | 248,746 s |
+
+La regresión final utilizó `python3 -B -m unittest discover -s tests -v`, sin
+fallos, errores ni omisiones. Incluye los cuatro métodos nuevos y no se repitió.
+Los comandos exactos de la selección enfocada y todos los canales se conservan
+en los cuatro subdirectorios numerados de la evidencia. Los hashes y modos del
+código y las pruebas no cambiaron durante la regresión; después solo se completó
+esta documentación y la evidencia local.
+
+Los inventarios finales confirman que la orquestación histórica, sus dos
+revisiones y el contraste anterior, incluida la captura del usuario, permanecen
+intactos. Sigue constando `intentos_agotados`, código 1, dos desarrollos y dos
+revisiones. No hubo incorporación, nuevas llamadas al modelo, cambio de red,
+umask global, contrato, evaluador congelado ni permisos históricos. Los cambios
+de este paso quedan sin commit, push ni merge; HEAD sigue pendiente de corrección
+en otro paso.
+
+### Estado posterior: integración HTTP y publicación
+
+Después de aquella reparación del controlador, el usuario autorizó la corrección
+asistida de HEAD, su revisión y la incorporación exacta de `booking_http.py`.
+La [guía HTTP](../evals/tareas_reales/booking_http/README.md#validación-conjunta-local-y-publicación-en-la-pr-16)
+documenta la secuencia. La validación conjunta del árbol integrado fue ejecutada
+por el usuario: **616 métodos correctos**, Python 3.12.3, código 0, sin omisiones,
+325,413 s de unittest. Se verificaron identidades, canales y hashes; código,
+pruebas y dependencias se conservan, por lo que no se repite por cambios
+documentales.
+
+La [PR #16](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/16)
+reúne el servidor, la conservación de identidad y permisos de revisión y las
+pruebas permanentes. La CI automática de esa publicación se contrasta aparte,
+incluido el commit realmente probado; un merge temporal de Actions no fusiona
+la PR. El experimento original y la regresión anterior de 534 permanecen con
+sus resultados históricos. No se reanuda la orquestación ni se activa auto-merge.
