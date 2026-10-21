@@ -14,7 +14,7 @@ from case_evidence import digest, read_regular, require
 from project_plan import (MAX_REQUEST, base_context, plan_state, render_proposal,
                           response_schema, validate_response)
 from project_plan_continuation import (CONTROLLER_SOURCES, MAX_ANSWERS, MAX_MESSAGE, continuation_data,
-                                      encoded, export_template, load_parent, model_data,
+                                      assumptions, encoded, export_template, load_parent, model_data,
                                       questions, regular_bytes)
 from project_task_config import git
 from repair_case import ProcessInterrupted, timestamp, write_json
@@ -66,7 +66,7 @@ def process_failure(agent):
     return None
 
 
-def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None):
+def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, decisions=None):
     started = time.monotonic()
     root = Path(project_root).resolve()
     log = None
@@ -88,14 +88,16 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None):
     try:
         parent = None
         if from_plan is not None:
-            require(request is None and answers is not None, "Continuación exige origen y respuestas, sin solicitud nueva")
+            require(request is None and (answers is not None or decisions is not None),
+                    "Continuación exige origen y respuestas o decisiones, sin solicitud nueva")
             parent = load_parent(from_plan)
-            answers_raw = regular_bytes(answers, MAX_ANSWERS)
-            continuation = continuation_data(parent, answers_raw)
+            answers_raw = regular_bytes(answers, MAX_ANSWERS) if answers is not None else None
+            decisions_raw = regular_bytes(decisions, MAX_ANSWERS) if decisions is not None else None
+            continuation = continuation_data(parent, answers_raw, decisions_raw)
             request = parent.proposal["solicitud_original"]
             result["solicitud_original"] = request
         else:
-            require(answers is None, "Respuestas requieren --from-plan")
+            require(answers is None and decisions is None, "Respuestas y decisiones requieren --from-plan")
         request_text(request)
         runs = root / "runs"
         require(not runs.is_symlink(), "runs no puede ser un enlace")
@@ -130,7 +132,9 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None):
             for name in ("solicitud.txt", "contexto.json"):
                 materials[name] = parent.materials[name]
             materials["continuacion.json"] = encoded(model_data(parent, continuation))
-            (log / "respuestas_usuario.json").write_bytes(answers_raw)
+            for name, raw_input in (("respuestas_usuario.json", answers_raw), ("decisiones_usuario.json", decisions_raw)):
+                if raw_input is not None:
+                    (log / name).write_bytes(raw_input)
         for name, raw in materials.items():
             (archive / name).write_bytes(raw)
         expected = tree_state(archive)
@@ -216,8 +220,10 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None):
                     "propuesta": plan}
         if parent:
             pending = questions(plan, continuation["profundidad"], continuation["pendientes_anteriores"])
-            proposal.update(version=2, continuacion=dict(continuation, preguntas_pendientes=pending))
-            if pending:
+            pending_assumptions = assumptions(plan, continuation["profundidad"], continuation["supuestos_anteriores"])
+            proposal.update(version=3, continuacion=dict(continuation, preguntas_pendientes=pending,
+                                                        supuestos_pendientes=pending_assumptions))
+            if pending or pending_assumptions:
                 proposal["estado"] = "necesita_aclaraciones"
         # Preparar ambas representaciones en memoria. Ante cualquier fallo de
         # escritura o de registro se eliminan los dos entregables de este run.
@@ -261,23 +267,29 @@ def main(arguments=None, *, project_root=PROJECT):
     parser.add_argument("--from-plan", metavar="REGISTRO", help="Registro validado que se continuará")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--answers-template", metavar="ARCHIVO", help="Exportar plantilla sin invocar modelos ni sobrescribir")
-    mode.add_argument("--answers", metavar="ARCHIVO", help="Respuestas explícitas para una nueva planificación")
+    mode.add_argument("--decisions-template", metavar="ARCHIVO", help="Exportar plantilla de decisiones sobre supuestos")
+    parser.add_argument("--answers", metavar="ARCHIVO", help="Respuestas explícitas para una nueva planificación")
+    parser.add_argument("--decisions", metavar="ARCHIVO", help="Decisiones explícitas; se puede combinar con --answers")
     args = parser.parse_args(arguments)
+    exporting = args.answers_template or args.decisions_template
+    continuing = args.answers or args.decisions
+    if exporting and continuing:
+        parser.error("Exportar una plantilla excluye --answers y --decisions")
     if args.from_plan:
-        if args.solicitud is not None or not (args.answers_template or args.answers):
-            parser.error("--from-plan exige --answers-template o --answers y excluye una solicitud nueva")
-    elif args.solicitud is None or args.answers_template or args.answers:
-        parser.error("Indica una solicitud, o --from-plan con --answers-template/--answers")
-    if args.answers_template:
+        if args.solicitud is not None or not (exporting or continuing):
+            parser.error("--from-plan exige una plantilla, --answers o --decisions y excluye una solicitud nueva")
+    elif args.solicitud is None or exporting or continuing:
+        parser.error("Indica una solicitud, o --from-plan con una operación de continuidad")
+    if exporting:
         try:
-            export_template(args.from_plan, args.answers_template)
+            export_template(args.from_plan, exporting, decisions=bool(args.decisions_template))
         except (OSError, ValueError, RecursionError) as exc:
             print("Fallo de plantilla:", error_text(exc), file=sys.stderr)
             return 1
-        print("Plantilla:", args.answers_template)
-        print("Sin invocación ni reserva; respuestas vacías, pendiente de completar.")
+        print("Plantilla:", exporting)
+        print("Sin invocación ni reserva; pendiente de completar por el usuario.")
         return 0
-    result = run_plan(args.solicitud, project_root, from_plan=args.from_plan, answers=args.answers)
+    result = run_plan(args.solicitud, project_root, from_plan=args.from_plan, answers=args.answers, decisions=args.decisions)
     stream = sys.stderr if result["codigo_salida"] else sys.stdout
     print("Estado:", result["estado"], file=stream)
     if result["registro"]:

@@ -290,7 +290,9 @@ encadenar desarrollo, evaluación o incorporación.
 ## Continuación con respuestas explícitas
 
 La ampliación posterior parte de `c09cf5ddca749c77da791634890ae1c8712f2f81`
-y conserva el comando inicial. Añade dos modos excluyentes:
+y conserva el comando inicial. Su primera versión (PR #18) añadió estas dos
+operaciones. La [ampliación de supuestos](#decisiones-explícitas-sobre-supuestos)
+descrita más abajo añade decisiones y permite combinarlas con respuestas:
 
 ```bash
 python3 -B plan_project.py --from-plan REGISTRO --answers-template respuestas.json
@@ -458,7 +460,7 @@ métodos encuentra **673 identidades únicas**, sin errores. La demostración
 simulada conserva una respuesta y las otras dos preguntas pendientes, con código
 0, sin modelo real, y recoge los temporales.
 
-La **validación integrada local está superada**. La ejecución aportada por el
+La **validación integrada local de la PR #18 está superada**. La ejecución aportada por el
 usuario en su terminal autorizada, conservada en
 `runs/20261021_continuacion_planificacion/validacion_terminal/`, ejecutó una vez
 `python3 -B -m unittest discover -s tests -v`: **673 métodos, 257,448 s de unittest,
@@ -480,5 +482,206 @@ el comando y las identidades ejecutadas. Las validaciones históricas de 650 o
 usan una CLI simulada: no acreditan la utilidad semántica de una continuación
 con modelo real, que sigue pendiente de autorización y contraste específico.
 
-No se ejecutan modelos reales ni se implementa promoción a contratos,
-evaluadores o configuraciones, ni incorporación automática.
+En ese cierre no se ejecutaron modelos reales ni se implementó promoción a
+contratos, evaluadores o configuraciones, ni incorporación automática.
+
+## Decisiones explícitas sobre supuestos
+
+Esta ampliación parte de `ec883bdd92b3f4ab2bacc595ae738fed000b90d4`, tras la
+PR #18. Una continuación real posterior, aportada por el usuario en
+`runs/2026-10-21T210836.807412Z_plan_project_503f055ad223467498125d06d966ffcb/`,
+conserva seis respuestas explícitas y produce cinco supuestos nuevos, sin
+preguntas pendientes. Su estado `necesita_aclaraciones` y código 0 permanecen
+intactos. Se inspeccionaron en lectura la propuesta, la respuesta original y los
+hashes de sus artefactos. No se decidió ninguno de sus supuestos ni se llamó a
+un modelo para este trabajo. El lector ampliado también admite ese registro v2:
+deriva `r1:s1` a `r1:s5`, conserva las seis respuestas y comprueba intacta la cadena,
+sin exportar una plantilla real ni aportar decisiones.
+
+El código anterior exportaba una lista de respuestas vacía en ese caso, pero
+exigía una respuesta no blanca para continuar. El estado era coherente; faltaba
+una vía para resolver los supuestos. La reproducción sintética conserva ese
+caso (seis respuestas, cero preguntas y cinco supuestos) y acredita el fallo
+previo de la nueva operación. Ninguna prueba permanente depende del registro real.
+
+### Operaciones actuales
+
+```bash
+# Exportación local, sin consultar la CLI, reservar ni sobrescribir.
+python3 -B plan_project.py --from-plan REGISTRO --decisions-template decisiones.json
+# Solo decisiones: no necesita --answers ni preguntas pendientes.
+python3 -B plan_project.py --from-plan REGISTRO --decisions decisiones.json
+# Respuestas y decisiones en una única revisión de hasta 300 segundos.
+python3 -B plan_project.py --from-plan REGISTRO --answers respuestas.json --decisions decisiones.json
+```
+
+Se conservan la petición inicial, `--answers-template` y `--answers`. Las dos
+exportaciones son mutuamente excluyentes y no se combinan con archivos de
+continuación ni con una petición nueva. `--answers` y `--decisions` sí pueden
+combinarse: ambos se validan antes de consultar la CLI o reservar y producen
+**una revisión, una invocación y un máximo de 300 s**, sin reintentos.
+Debe haber al menos una respuesta nueva no blanca o una decisión efectiva nueva;
+un archivo de respuestas sin contestar puede acompañar decisiones efectivas,
+y viceversa. Los archivos vacíos o inválidos no habilitan ninguna invocación.
+
+### Formato cerrado de decisiones v1
+
+La plantilla contiene exactamente `version: 1`,
+`tipo: "decisiones_planificacion"`, `origen` y `decisiones`. El `origen` contiene
+la ruta absoluta `registro` y los hashes `propuesta_sha256` y `resultado_sha256`
+del padre exacto. Cada elemento de `decisiones` contiene exactamente:
+
+| Campo | Regla |
+| --- | --- |
+| `id` | Asignado por el controlador: `r0:s1`, `r0:s2`, `r1:s1`, etc., por revisión y posición. |
+| `supuesto` | Texto original exacto; no se edita para corregirlo. |
+| `origen_supuesto` | Registro y hashes de la propuesta y resultado donde apareció ese supuesto; puede ser un antepasado del padre actual. |
+| `decision` | `sin_decidir`, `aceptar`, `rechazar` o `corregir`. |
+| `explicacion` | Texto no blanco únicamente para `rechazar`; en los demás casos debe ser exactamente `""`. |
+| `alternativa` | Formulación explícita no blanca únicamente para `corregir`; en los demás casos debe ser exactamente `""`. |
+
+`origen_supuesto` usa las mismas tres claves que `origen`. Conserva todos los
+campos de procedencia, IDs, textos y el orden exportados. Edita únicamente
+`decision`, `explicacion` y `alternativa`, con estas combinaciones:
+
+| Decisión | Explicación | Alternativa | Efecto |
+| --- | --- | --- | --- |
+| `sin_decidir` | `""` | `""` | Sigue pendiente; es el valor inicial de la plantilla. |
+| `aceptar` | `""` | `""` | Adoptar expresamente el supuesto original. |
+| `rechazar` | No blanca | `""` | Registrar que no debe adoptarse y el motivo; no inventar una alternativa. |
+| `corregir` | `""` | No blanca | Aportar la formulación alternativa explícita. |
+
+Los textos aportados se conservan exactamente, incluidos Unicode, espacios y
+saltos de línea. Se rechazan claves duplicadas o extra, tipos incorrectos,
+Unicode inválido, NUL, IDs desconocidos, decisiones sobre elementos ya resueltos,
+orígenes alterados y combinaciones de campos incoherentes. No se permite
+sustituir decisiones anteriores; la plantilla incluye solo supuestos pendientes.
+
+### Demostración exclusivamente sintética
+
+Un registro simulado contiene seis respuestas, cero preguntas y cinco supuestos
+identificados como `r1:s1` a `r1:s5`. Tras exportar la plantilla, este ejemplo
+edita solo los tres campos de decisión, manteniendo la procedencia generada:
+
+| Supuesto sintético | Decisión | Texto aportado en el ejemplo |
+| --- | --- | --- |
+| `r1:s1` | `aceptar` | Ningún texto adicional. |
+| `r1:s2` | `rechazar` | Explicación: `No adoptar este supuesto sintético.` |
+| `r1:s3` | `corregir` | Alternativa: `Formulación alternativa exclusivamente sintética.` |
+| `r1:s4` y `r1:s5` | `sin_decidir` | Ambos campos vacíos. |
+
+La salida simulada omite los supuestos. El controlador conserva las seis
+respuestas y las tres decisiones por separado, mantiene dos supuestos pendientes
+y devuelve `necesita_aclaraciones`, código 0. Si en otra revisión se resuelven
+todos y el modelo no introduce otros asuntos pendientes, puede resultar un
+`borrador`. Ninguna de estas operaciones aprueba ni autoriza desarrollo. El
+ejemplo no contiene decisiones del usuario sobre sus supuestos reales.
+
+### Procedencia, compatibilidad y estado
+
+El esquema de respuesta del modelo **sigue en v1**. La petición inicial sigue
+produciendo un envoltorio de propuesta v1. Las continuaciones nuevas generan
+`propuesta.json` **v3**, con `continuacion.version: 2`; se mantiene la lectura
+de originales v1 y revisiones v2 con metadatos v1. El formato de archivos de
+respuestas sigue siendo v1. No se reescribe ni reclasifica la evidencia anterior.
+Una revisión v3 no puede volver al formato v2 para perder sus decisiones.
+
+Los nuevos metadatos conservan los campos de respuestas y preguntas anteriores,
+y añaden `decisiones_confirmadas`, `supuestos_anteriores` y
+`supuestos_pendientes`. Cada decisión conserva el supuesto y su origen, además
+de la acción y el texto explícitos. El término «confirmadas» identifica datos
+aportados expresamente por el usuario, incluida la decisión de rechazar; no
+significa que se adopten todos los supuestos. La respuesta original del modelo
+se conserva por separado y no se modifica para introducir decisiones o pendientes.
+
+El lector deriva IDs deterministas para los supuestos de los registros antiguos.
+Arrastra los no decididos de la cadena aunque un modelo posterior los hubiera
+omitido. No infiere identidad ni resolución por texto, por respuestas a preguntas
+distintas ni por el estado histórico. Los estados archivados se validan con las
+reglas de su versión, sin reescribirlos. Cada supuesto nuevo del modelo recibe un
+ID nuevo, incluso si repite literalmente uno aceptado o corregido.
+
+El estado de una revisión nueva sigue siendo `necesita_aclaraciones` mientras
+queden preguntas o supuestos pendientes, o la viabilidad lo requiera. Resolverlos
+puede producir un borrador; nunca aprobación. La solicitud y el contexto siguen
+siendo históricos; el árbol y el HEAD actuales se comparan con su propio estado
+inicial. Las decisiones anteriores se acumulan sin reemplazos. Los hashes
+acreditan correspondencia, no autenticidad frente a una reescritura integral.
+
+`decisiones_usuario.json` conserva los bytes exactos del archivo aportado. Si
+también se aportan respuestas, se archiva `respuestas_usuario.json`; no se fabrica
+uno vacío cuando no se suministra. El mensaje incluye el texto archivado de
+`continuacion.json` v2, con los campos anteriores y:
+
+- `supuestos_identificados`: ID y texto de los pendientes del padre.
+- `decisiones_explicitas_del_usuario`: decisiones acumuladas con ID, supuesto,
+  acción, explicación y alternativa.
+- `supuestos_sin_decidir`: pendientes que no recibieron una decisión efectiva.
+
+Las rutas y hashes de procedencia permanecen en el registro; el modelo recibe
+las referencias textuales necesarias, sin registros completos ni fuentes,
+credenciales o configuración personal. El prompt distingue las decisiones de
+los nuevos supuestos. Esta separación no acredita automáticamente el cumplimiento
+semántico por el modelo: requiere un contraste específico de cada propuesta.
+
+### Límites, comprobaciones y pendientes
+
+Se conservan los límites de ocho revisiones, 8 MiB por archivo de evidencia,
+64 MiB de cadena, 64 artefactos por registro y 4 MiB de mensaje. Cada plantilla
+admite hasta 1 MiB. Los archivos aportados de respuestas y decisiones, **sumados**,
+admiten hasta 1 MiB; cada explicación o alternativa admite 8.000 caracteres.
+No se trunca ningún texto ni se amplía el presupuesto para combinar operaciones.
+Las restricciones del agente, el adaptador compartido y el motor no cambian.
+
+Los códigos siguen siendo 0 (plantilla exportada o borrador generado), 1 (datos,
+integridad o ejecución inválidos, sin propuesta nueva parcial) y 2 (argumentos
+incompatibles). Un rechazo de entradas ocurre antes de consultar la CLI o reservar.
+
+Las [pruebas sintéticas](../tests/test_plan_decisions.py) comprueban stdin antes de
+emitir la respuesta prefijada. Cubren decisiones sin preguntas, las cuatro
+acciones, entradas combinadas, acumulación, omisiones, formatos históricos,
+procedencia, Unicode, límites, errores y ausencia de aprobación automática.
+La reproducción inicial conservada ejecutó un método con un fallo (0,380 s);
+tras la primera corrección, el mismo caso pasó (0,625 s). Una batería enfocada
+posterior superó 73 métodos (22,519 s). La revisión detectó además una pérdida
+de decisiones al degradar una revisión v3 al formato v2: la reproducción
+conservada falló (un método, 0,557 s) y se añadió su rechazo explícito.
+
+Tras ese ajuste pasaron **74 métodos enfocados en 24,517 s** y tres controles
+de compatibilidad: configuración v1 (0,030 s), configuración v2 (0,063 s) y
+adaptador compartido (0,119 s), un método cada uno. Todos terminaron con código
+0, sin fallos, errores ni omisiones, con Python 3.12.3. El descubrimiento sin
+ejecutar métodos encuentra **690 identidades únicas**, sin errores. La demostración
+simulada completó el recorrido descrito: seis respuestas conservadas, tres
+decisiones, dos supuestos pendientes y ninguna aprobación.
+
+La evidencia de desarrollo, los comandos, canales, hashes y la demostración quedan
+en `runs/20261021_decisiones_supuestos/`, fuera de Git. Sus informes históricos,
+incluido el que dejaba pendiente la suite integrada, permanecen intactos.
+
+La **validación integrada local de esta ampliación está superada**. La ejecución
+aportada por el usuario en su terminal autorizada se conserva en
+`runs/20261021_decisiones_supuestos/validacion_terminal/`. El runner ejecutó una
+vez `python3 -B -m unittest discover -s tests -v`: **690 métodos, 300,325 s de
+unittest, Python 3.12.3, código 0**, sin fallos, errores ni omisiones. Utilizó el
+entorno `evaluation`, un límite de 600 s y recogida de procesos; la duración del
+proceso completo fue de 300,642 s. Las 690 identidades ordenadas coinciden con el
+inventario y se conservaron el árbol y HEAD.
+
+El cierre del 22 de octubre contrastó el informe con ambos canales, el manifiesto
+de hashes y los 159 archivos del árbol evaluado, incluidos el runner y sus
+dependencias. Todos coincidían en contenido, modo y tamaño antes de actualizar
+exclusivamente README y esta guía. **Estos cambios documentales son posteriores
+a la suite**; el código, las pruebas y sus dependencias permanecen iguales, por
+lo que se reutiliza la validación sin repetir suites locales. La evidencia de
+este cotejo y de la publicación queda por separado, excluida de Git, en
+`runs/20261022_decisiones_supuestos_publicacion/`.
+
+La CI automática de la publicación se comprueba por separado sobre su SHA,
+comando, versión de Python e identidades ejecutadas. Las 673 pruebas locales y
+la CI del hito anterior acreditan únicamente su árbol histórico. Las pruebas de
+planificación de esta suite utilizan respuestas simuladas: **la utilidad semántica
+de una continuación real con decisiones sigue pendiente** y requiere autorización
+expresa y contraste específico. No se han ejecutado modelos reales para este
+cierre ni se convierte el borrador en contratos, evaluadores, configuraciones o
+tareas ejecutables.

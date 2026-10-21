@@ -57,6 +57,11 @@ respuestas explícitas sin convertir el borrador en una tarea ejecutable:
 python3 -B plan_project.py --from-plan REGISTRO --answers-template respuestas.json
 # Tras editar solo los campos respuesta: una nueva invocación, máximo 300 s.
 python3 -B plan_project.py --from-plan REGISTRO --answers respuestas.json
+# Supuestos sin preguntas: exportar y luego aportar decisiones explícitas.
+python3 -B plan_project.py --from-plan REGISTRO --decisions-template decisiones.json
+python3 -B plan_project.py --from-plan REGISTRO --decisions decisiones.json
+# Preguntas y supuestos juntos: una sola revisión y una única invocación.
+python3 -B plan_project.py --from-plan REGISTRO --answers respuestas.json --decisions decisiones.json
 ```
 
 La plantilla vincula preguntas identificadas por el controlador con los hashes
@@ -66,12 +71,23 @@ un registro nuevo. No se permite sustituir respuestas previas. La
 [guía de continuación](docs/planificacion-proyectos.md#continuación-con-respuestas-explícitas)
 describe el formato cerrado, los códigos y los límites (ocho revisiones, respuestas
 hasta 1 MiB y mensaje hasta 4 MiB), con un ejemplo sintético. La terminal autorizada
-del usuario superó la validación integrada local: **673 métodos, 257,448 s,
+del usuario superó la validación integrada local del hito anterior: **673 métodos, 257,448 s,
 código 0**, sin omisiones y con identidades, árbol y HEAD conservados. Las pruebas
-de planificación usan una CLI simulada; una continuación con modelo real sigue
-pendiente de autorización y contraste semántico. La CI automática de la nueva
-publicación se comprueba por separado. Las validaciones históricas acreditan sus
-árboles respectivos.
+de planificación usan una CLI simulada. Una continuación real posterior expuso
+el bloqueo de cinco supuestos sin preguntas; la
+[ampliación de decisiones](docs/planificacion-proyectos.md#decisiones-explícitas-sobre-supuestos)
+permite aceptarlos, rechazarlos con explicación o corregirlos con una alternativa
+explícita. Los no decididos siguen pendientes aunque el modelo los omita.
+Las decisiones y las respuestas se conservan separadas; resolverlas no aprueba
+el borrador. La terminal autorizada del usuario superó la validación integrada de
+esta ampliación: **690 métodos, 300,325 s de unittest, Python 3.12.3, código 0**,
+sin fallos, errores ni omisiones; las identidades, el árbol y HEAD se conservaron.
+El cierre cotejó canales y hashes de los 159 archivos y reutiliza esa ejecución
+sin repetir suites locales. Esta actualización de README y la guía es posterior
+a la suite. Las pruebas de planificación usan respuestas simuladas; la utilidad
+semántica de una continuación real con decisiones sigue pendiente. La CI automática
+de la publicación se comprueba por separado. Las validaciones históricas acreditan
+sus árboles respectivos.
 
 El controlador fija contrato y pruebas, evalúa la partida y encarga al
 desarrollador modificar una copia de `solution.py`. Después evalúa el candidato

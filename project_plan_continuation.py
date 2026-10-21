@@ -88,6 +88,11 @@ def questions(plan, depth, carried=()):
                             for index, text in enumerate(plan["preguntas_pendientes"], 1)]
 
 
+def assumptions(plan, depth, carried=()):
+    return list(carried) + [{"id": f"r{depth}:s{index}", "supuesto": text}
+                            for index, text in enumerate(plan["supuestos"], 1)]
+
+
 def reference(parent):
     return {"registro": str(parent.path), "propuesta_sha256": digest(parent.proposal_raw),
             "resultado_sha256": digest(parent.result_raw)}
@@ -96,6 +101,42 @@ def reference(parent):
 def template(parent):
     return {"version": 1, "tipo": "respuestas_planificacion", "origen": reference(parent),
             "respuestas": [dict(q, respuesta="") for q in parent.pending]}
+
+
+def decisions_template(parent):
+    return {"version": 1, "tipo": "decisiones_planificacion", "origen": reference(parent),
+            "decisiones": [dict(item, origen_supuesto=parent.assumption_origins[item["id"]],
+                                decision="sin_decidir", explicacion="", alternativa="")
+                           for item in parent.pending_assumptions]}
+
+
+def validate_decisions(raw, parent):
+    require(len(raw) <= MAX_ANSWERS, "Decisiones superan 1 MiB")
+    value = parse_json(raw)
+    expected = decisions_template(parent)
+    fields(value, expected, "decisiones")
+    require(type(value["version"]) is int and value["version"] == 1 and
+            value["tipo"] == expected["tipo"] and value["origen"] == expected["origen"],
+            "Origen de decisiones no corresponde al registro exacto")
+    require(type(value["decisiones"]) is list and len(value["decisiones"]) == len(expected["decisiones"]),
+            "Conjunto de supuestos incorrecto")
+    decided, pending = [], []
+    for item, original, assumption in zip(value["decisiones"], expected["decisiones"], parent.pending_assumptions):
+        fields(item, original, "decisión individual")
+        require(all(item[k] == original[k] for k in ("id", "supuesto", "origen_supuesto")),
+                "Identificador, supuesto u origen alterados")
+        action = item["decision"]
+        require(type(action) is str and action in ("sin_decidir", "aceptar", "rechazar", "corregir"),
+                "Decisión no admitida")
+        utf8(item["explicacion"], MAX_ANSWER_TEXT, "explicación", nonblank=action == "rechazar")
+        utf8(item["alternativa"], MAX_ANSWER_TEXT, "alternativa", nonblank=action == "corregir")
+        require(action == "rechazar" or item["explicacion"] == "", "Explicación solo para rechazar")
+        require(action == "corregir" or item["alternativa"] == "", "Alternativa solo para corregir")
+        if action == "sin_decidir":
+            pending.append(assumption)
+        else:
+            decided.append(item)
+    return parent.decisions + decided, pending
 
 
 def validate_answers(raw, parent, *, require_answer=True):
@@ -132,6 +173,9 @@ class Parent:
     pending: list
     answers: list
     identities: dict
+    pending_assumptions: list
+    decisions: list
+    assumption_origins: dict
 
     def intact(self):
         try:
@@ -142,11 +186,27 @@ class Parent:
             return False
 
 
-def continuation_data(parent, answers_raw):
-    answers, pending = validate_answers(answers_raw, parent)
+def continuation_data(parent, answers_raw=None, decisions_raw=None, *, version=2):
     require(parent.depth < MAX_DEPTH, "Máximo de ocho revisiones alcanzado")
-    return {"version": 1, "profundidad": parent.depth + 1, "padre": reference(parent),
-            "respuestas_confirmadas": answers, "pendientes_anteriores": pending}
+    if version == 1:  # reconstrucción exacta de evidencia histórica, nunca nueva ejecución
+        require(parent.proposal["version"] <= 2, "Una revisión v3 no puede continuar como formato histórico v2")
+        require(answers_raw is not None and decisions_raw is None, "Faltan respuestas históricas")
+        answers, pending = validate_answers(answers_raw, parent)
+        return {"version": 1, "profundidad": parent.depth + 1, "padre": reference(parent),
+                "respuestas_confirmadas": answers, "pendientes_anteriores": pending}
+    require(version == 2, "Versión de continuidad no admitida")
+    require(answers_raw is not None or decisions_raw is not None, "Faltan respuestas o decisiones")
+    require(sum(len(raw) for raw in (answers_raw, decisions_raw) if raw is not None) <= MAX_ANSWERS,
+            "Entradas de continuación superan 1 MiB en conjunto")
+    answers, pending = (validate_answers(answers_raw, parent, require_answer=False) if answers_raw is not None
+                        else (parent.answers, parent.pending))
+    decisions, pending_assumptions = (validate_decisions(decisions_raw, parent) if decisions_raw is not None
+                                      else (parent.decisions, parent.pending_assumptions))
+    require(len(answers) > len(parent.answers) or len(decisions) > len(parent.decisions),
+            "Se necesita una respuesta no blanca o una decisión efectiva nueva")
+    return {"version": 2, "profundidad": parent.depth + 1, "padre": reference(parent),
+            "respuestas_confirmadas": answers, "pendientes_anteriores": pending,
+            "decisiones_confirmadas": decisions, "supuestos_anteriores": pending_assumptions}
 
 
 def load_parent(path):
@@ -197,12 +257,12 @@ def load_parent(path):
         require(needed <= set(blobs), "Faltan materiales o propuesta de origen")
         proposal = parse_json(blobs["propuesta.json"])
         require(type(proposal) is dict and type(proposal.get("version")) is int and
-                proposal["version"] in (1, 2), "Versión de propuesta no admitida")
+                proposal["version"] in (1, 2, 3), "Versión de propuesta no admitida")
         keys = {"version", "tipo", "estado", "solicitud_original", "commit_base", "procedencia", "propuesta"}
-        fields(proposal, keys | ({"continuacion"} if proposal["version"] == 2 else set()), "propuesta archivada")
+        fields(proposal, keys | ({"continuacion"} if proposal["version"] >= 2 else set()), "propuesta archivada")
         materials = {name.removeprefix("materiales/"): raw for name, raw in blobs.items()
                      if name.startswith("materiales/")}
-        require(set(materials) == set(MATERIALS) | ({"continuacion.json"} if proposal["version"] == 2 else set()),
+        require(set(materials) == set(MATERIALS) | ({"continuacion.json"} if proposal["version"] >= 2 else set()),
                 "Materiales inesperados")
         request = materials["solicitud.txt"].decode("utf-8")
         utf8(request, MAX_REQUEST, "solicitud original", nonblank=True)
@@ -235,18 +295,22 @@ def load_parent(path):
         require(type(reservation) is dict and reservation.get("rol") == "planificador" and reservation.get("numero") == 1
                 and reservation.get("limite_segundos") == 300, "Reserva de origen incoherente")
         depth, answers, carried = 0, [], []
-        if proposal["version"] == 2:
-            require("respuestas_usuario.json" in blobs, "Faltan respuestas originales")
+        decisions, carried_assumptions, origins = [], [], {}
+        if proposal["version"] >= 2:
             meta = proposal["continuacion"]
-            fields(meta, ("version", "profundidad", "padre", "respuestas_confirmadas",
-                          "pendientes_anteriores", "preguntas_pendientes"), "continuación")
-            require(type(meta["version"]) is int and meta["version"] == 1 and
+            keys = {"version", "profundidad", "padre", "respuestas_confirmadas",
+                    "pendientes_anteriores", "preguntas_pendientes"}
+            if proposal["version"] == 3:
+                keys.update(("decisiones_confirmadas", "supuestos_anteriores", "supuestos_pendientes"))
+            fields(meta, keys, "continuación")
+            require(type(meta["version"]) is int and meta["version"] == proposal["version"] - 1 and
                     type(meta["profundidad"]) is int and 1 <= meta["profundidad"] <= MAX_DEPTH,
                     "Profundidad o versión inválidas")
             fields(meta["padre"], ("registro", "propuesta_sha256", "resultado_sha256"), "padre")
             utf8(meta["padre"]["registro"], 4096, "registro padre", nonblank=True)
             parent = load(meta["padre"]["registro"], remaining - 1)
-            expected = continuation_data(parent, blobs["respuestas_usuario.json"])
+            expected = continuation_data(parent, blobs.get("respuestas_usuario.json"),
+                                         blobs.get("decisiones_usuario.json"), version=meta["version"])
             require({k: meta[k] for k in expected} == expected, "Continuación no corresponde al padre y respuestas")
             require(provenance.get("continuacion") == expected, "Procedencia de continuación incoherente")
             controller = provenance.get("controlador")
@@ -261,14 +325,26 @@ def load_parent(path):
             require(parse_json(materials["continuacion.json"]) == model_data(parent, expected),
                     "Materiales de continuación incoherentes")
             depth, answers, carried = expected["profundidad"], expected["respuestas_confirmadas"], expected["pendientes_anteriores"]
+            decisions = expected.get("decisiones_confirmadas", [])
+            carried_assumptions = expected.get("supuestos_anteriores", parent.pending_assumptions)
+            origins = dict(parent.assumption_origins)
         pending = questions(plan, depth, carried)
-        if proposal["version"] == 2:
+        pending_assumptions = assumptions(plan, depth, carried_assumptions)
+        if proposal["version"] >= 2:
             require(meta["preguntas_pendientes"] == pending, "Preguntas pendientes alteradas")
+        if proposal["version"] == 3:
+            require(meta["supuestos_pendientes"] == pending_assumptions, "Supuestos pendientes alterados")
+        # No reclasificar estados históricos: v1/v2 no conservaban pendientes de supuestos.
         state = "necesita_aclaraciones" if pending else plan_state(plan)
+        if proposal["version"] == 3 and pending_assumptions:
+            state = "necesita_aclaraciones"
         require(result.get("estado") == proposal["estado"] == state, "Estado de origen incoherente")
         require(blobs["propuesta.md"] == render_proposal(proposal).encode("utf-8"), "Markdown de origen incoherente")
-        return Parent(path, result_raw, blobs["propuesta.json"], proposal, materials,
-                      depth, pending, answers, identities)
+        loaded = Parent(path, result_raw, blobs["propuesta.json"], proposal, materials,
+                        depth, pending, answers, identities, pending_assumptions, decisions, origins)
+        for item in assumptions(plan, depth):
+            origins[item["id"]] = reference(loaded)
+        return loaded
 
     try:
         return load(path, MAX_DEPTH)
@@ -278,16 +354,23 @@ def load_parent(path):
 
 def model_data(parent, data):
     # Selección explícita: ningún canal, ruta local, hash ni registro completo.
-    return {"version": 1, "propuesta_anterior_del_modelo": parent.proposal["propuesta"],
-            "preguntas_identificadas": parent.pending,
-            "respuestas_explicitas_del_usuario": data["respuestas_confirmadas"],
-            "preguntas_sin_responder": data["pendientes_anteriores"]}
+    material = {"version": data["version"], "propuesta_anterior_del_modelo": parent.proposal["propuesta"],
+                "preguntas_identificadas": parent.pending,
+                "respuestas_explicitas_del_usuario": data["respuestas_confirmadas"],
+                "preguntas_sin_responder": data["pendientes_anteriores"]}
+    if data["version"] == 2:
+        material.update(supuestos_identificados=parent.pending_assumptions,
+                        decisiones_explicitas_del_usuario=[
+                            {key: item[key] for key in ("id", "supuesto", "decision", "explicacion", "alternativa")}
+                            for item in data["decisiones_confirmadas"]],
+                        supuestos_sin_decidir=data["supuestos_anteriores"])
+    return material
 
 
-def export_template(path, destination):
+def export_template(path, destination, *, decisions=False):
     parent = load_parent(path)
     require(parent.depth < MAX_DEPTH, "Máximo de ocho revisiones alcanzado")
-    raw = encoded(template(parent))
+    raw = encoded(decisions_template(parent) if decisions else template(parent))
     require(len(raw) <= MAX_ANSWERS, "Plantilla supera 1 MiB")
     require(parent.intact(), "Origen alterado antes de exportar")
     target = Path(destination).resolve()
