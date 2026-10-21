@@ -16,7 +16,8 @@ MULTIPLE = "orquestacion_configurable_v2"
 PROTECTED = {"orchestrate_project.py", "project_flow.py", "project_flow_runner.py",
              "project_task_config.py", "project_delivery.py", "project_test_inventory.py",
              "repair_project.py", "review_project.py", "review_case.py", "repair_case.py",
-             "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py"}
+             "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py",
+             "plan_project.py", "project_plan.py"}
 RESERVED = {"inspect-json", "export-csv"}
 LIMITS = {"desarrollador": 600, "revisor": 600, "aceptacion": 300,
           "regresion": 600, "inventario": 120, "consulta_cli": 10}
