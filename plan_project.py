@@ -113,7 +113,12 @@ def run_plan(request, project_root=PROJECT):
         for name, raw in materials.items():
             (archive / name).write_bytes(raw)
         expected = tree_state(archive)
-        prompt = instructions + b"\nLee solicitud.txt y contexto.json. Devuelve solo el JSON del esquema.\n"
+        # Los textos archivados viajan completos: no requieren herramientas de lectura.
+        prompt = (json.dumps({
+            "instrucciones": materials["instrucciones.md"].decode("utf-8"),
+            "materiales": {name: materials[name].decode("utf-8") for name in (
+                "solicitud.txt", "contexto.json", "respuesta.schema.json")},
+        }, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         (agent_log / "entrada.txt").write_bytes(prompt)
         write_json(log / "proyecto_antes.json", before)
         write_json(log / "procedencia.json", {

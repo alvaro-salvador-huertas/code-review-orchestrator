@@ -8,8 +8,10 @@ python3 -B plan_project.py "Descripción del trabajo que quiero realizar"
 
 Necesita Codex CLI disponible y autenticado. Genera un borrador revisable con una
 sola sesión nueva de solo lectura, sin desarrollo, evaluación, revisión del
-producto ni incorporación. No se ha probado contra un modelo real durante este
-hito. `python3 -B plan_project.py --help` no invoca modelos ni crea registros.
+producto ni incorporación. La entrega de materiales en el mensaje tiene pruebas
+con una CLI simulada y un contraste real favorable para una petición abierta de
+API de reservas. Un caso no acredita fiabilidad general ni aprueba el borrador.
+`python3 -B plan_project.py --help` no invoca modelos ni crea registros.
 
 El controlador fija la petición original y el commit `HEAD` de la base. El modelo
 recibe únicamente petición, instrucciones, restricciones, esquema y nombres/tipos
@@ -17,6 +19,14 @@ de los archivos Python de la raíz de esa base. No recibe fuentes del proyecto,
 registros privados ni configuración personal. Los cambios pendientes se conservan,
 pero no forman parte del inventario de la base. Sin las fuentes, inferir el
 comportamiento de un módulo por su nombre no constituye un hecho comprobado.
+
+El stdin enviado al adaptador es un único objeto JSON con `instrucciones` y
+`materiales`. Este último contiene los textos UTF-8 íntegros de `solicitud.txt`,
+`contexto.json` y `respuesta.schema.json`, obtenidos de los mismos bytes que se
+archivan. La serialización conserva comillas, Unicode y saltos de línea sin
+confundir el texto del usuario con delimitadores. El modelo dispone de los datos
+en el mensaje y no necesita herramientas de lectura. Se mantienen el esquema
+por `--output-schema`, la validación local y `planificador/entrada.txt` con su hash.
 
 ## Esquema cerrado de propuesta v1
 
@@ -188,9 +198,9 @@ rechazarlos. Los resultados y fuentes están en el registro nuevo excluido de Gi
 `runs/20261020_planificacion_proyectos_revision_publicacion/`; los anteriores
 permanecen intactos.
 
-El descubrimiento final, sin ejecutar métodos, cuenta **650 identidades únicas**:
+El descubrimiento de la publicación anterior contó **650 identidades únicas**:
 616 anteriores y 34 de planificación. La validación de 648 corresponde al árbol
-anterior a estas dos correcciones; no acredita por sí sola el árbol final.
+anterior a estas dos correcciones; no acredita por sí sola aquel árbol final.
 La CI automática de la PR hacia `main` ejecuta el descubrimiento completo sobre
 la publicación final; su resultado, comando y commit se contrastan por separado.
 No se han abierto sockets desde el entorno restringido ni repetido regresiones
@@ -201,21 +211,78 @@ definir un contrato y un evaluador **de confianza del usuario**, y preparar
 manualmente una configuración admitida por el motor. No hay promoción automática
 a `tasks/config`, evaluador generado ni autorización implícita para desarrollar.
 
-## Experimento semántico preparado, todavía sin ejecutar
+## Experimentos reales y corrección de entrega, 21 de octubre de 2026
 
-Una única petición propuesta: «Créame una API de reservas». El presupuesto
-máximo es **una invocación de planificación, 300 s, sin reintentos**; las consultas
-de versión y ayuda mantienen 10 s cada una. Solo se lanzará cuando el usuario
-decida ejecutar expresamente esa prueba. No hay autorización para encadenar
-desarrollo, evaluación, revisión ni incorporación.
+Los registros reales se conservan sin reescribir sus resultados. El intento
+del 20 de octubre, `2026-10-20T182957.275784Z_plan_project_6962b930a7f345b58d015de10ad871b4`,
+terminó con `fallo_tecnico`, código 1 y una reserva consumida, durante el arranque
+de la CLI. Es distinto de la ejecución aportada del 21 de octubre,
+`2026-10-21T123558.309159Z_plan_project_a0cdaf1e30e843e381b5e177e3d22962`:
+esta terminó con `necesita_aclaraciones` y código 0, pero pidió el contenido de
+los archivos de entrada porque no podía leerlos sin ejecutar comandos.
+Su respuesta era estructuralmente válida y semánticamente insuficiente: no
+interpretó la petición ni produjo preguntas útiles sobre su alcance.
 
-Se revisarán el JSON original y la propuesta renderizada, no solo su validez
-estructural: si identifica la ambigüedad de operaciones, interfaz y persistencia;
-si separa preguntas y supuestos de decisiones del usuario; si evita inventar el
-contenido de los módulos que solo conoce por nombre; y si respeta raíz Python,
-biblioteca estándar y archivos protegidos. Una propuesta sin archivos puede ser
-adecuada mientras falte alcance. Se registrarán ejemplos concretos de aciertos
-y omisiones, sin convertir una sola respuesta en una tasa de fiabilidad.
+El controlador enviaba instrucciones para leer solicitud y contexto mientras
+prohibía ejecutar comandos. Los archivos del workspace no garantizaban su entrega
+al modelo. Ahora incluye los tres materiales en stdin y el prompt pide trabajar
+con su contenido. El adaptador compartido, los permisos, la reserva previa y el
+máximo de una invocación de 300 s no cambian. No hay heurísticas por frases de la
+respuesta ni preguntas de negocio añadidas por el controlador.
 
-Las respuestas prefijadas de las pruebas no cuentan como resultados de este
-experimento. Sus resultados semánticos siguen pendientes.
+La reproducción con CLI simulada falló antes de corregir el controlador:
+**1 método, 1 fallo, 0,227 s, código 1**. Tras el cambio pasaron **36 métodos
+enfocados, 6,686 s**, y tres comprobaciones de compatibilidad: configuración v1
+(0,033 s), v2 (0,063 s) y adaptador compartido de revisión (0,119 s), un método
+cada una, todas con código 0 y sin omisiones, con Python 3.12.3.
+
+La fixture coteja stdin con los materiales archivados antes de emitir su respuesta
+prefijada. Se comprueban correspondencia exacta, Unicode, comillas, saltos de
+línea, delimitadores aparentes y exclusión de fuentes, secretos sintéticos y
+archivos privados. Seis controles negativos omiten o alteran cada material en
+stdin: la fixture no responde aunque los archivos del workspace estén intactos.
+Esto acredita entrega de información, no comprensión semántica. El fallo previo,
+los canales, comandos, fuentes y hashes están en el registro privado nuevo
+`runs/20261021_planificador_materiales_en_mensaje/`.
+
+La ejecución real posterior, aportada para este cierre,
+`2026-10-21T125637.070636Z_plan_project_839636f0bd2c4f9eb77e8fbe79b4e024`,
+terminó con código 0 y `necesita_aclaraciones`. Su respuesta original tiene
+SHA-256 `7874fa15c041b661711bf9a775aeb63f59bde71a8e5de52a884d06b6612a0927`.
+Se cotejaron entrada, materiales, fuentes registradas, respuesta, propuesta JSON
+y representación Markdown. La CLI empleó 33,207 s de los 300 s reservados, con
+una invocación; el controlador empleó 33,404 s. Este cierre analiza esa ejecución
+conservada y no realiza una planificación nueva.
+
+El contraste automático asistido por Codex distingue dos conclusiones:
+
+- **Estructura:** respuesta válida, procedencia y textos enviados coherentes con
+  la evidencia; estado adecuado para una petición aún sin concretar.
+- **Utilidad semántica de este caso:** interpreta «Créame una API de reservas» y
+  pregunta qué se reserva, qué datos y operaciones se necesitan, qué interfaz se
+  espera, si debe persistir, qué reglas de disponibilidad/cancelación aplican y
+  si se requiere autenticación o permisos. Ofrece opciones sin convertirlas en
+  decisiones confirmadas. No inventa respuestas ni funcionalidades de módulos
+  conocidos solo por nombre; mantiene Python, biblioteca estándar y protección
+  de infraestructura. Dejar archivos y criterios vacíos es coherente mientras
+  falten esas decisiones. La pregunta de acceso no impone autenticación.
+
+Esta valoración no exige una redacción literal ni demuestra fiabilidad general.
+Tampoco convierte el código 0 anterior en una planificación útil ni acredita
+haber resuelto causalmente el EROFS del primer intento. Los tres históricos
+permanecen intactos, con sus reservas y resultados originales.
+
+El cierre reutiliza las 36 pruebas enfocadas y las tres de compatibilidad tras
+cotejar sus fuentes, dependencias versionadas, canales y hashes; solo se amplía
+la documentación del contraste. El inventario actual, obtenido sin ejecutar
+métodos, contiene **652 identidades únicas**, sin errores de descubrimiento.
+Las 650 pruebas anteriores acreditan su publicación anterior, no este árbol.
+La validación completa de la publicación corresponde a la CI automática del
+nuevo commit en la [PR #17](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/17),
+cuyo resultado y SHA probado se contrastan por separado. No se repite localmente
+la suite completa. La evidencia detallada del cierre queda fuera de Git en
+`runs/20261021_planificador_cierre_publicacion/`.
+
+El borrador sigue pendiente de respuestas y revisión humana. No se implementa
+todavía una CLI de continuación ni se autoriza encadenar desarrollo, evaluación
+o incorporación.
