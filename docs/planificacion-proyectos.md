@@ -283,6 +283,202 @@ cuyo resultado y SHA probado se contrastan por separado. No se repite localmente
 la suite completa. La evidencia detallada del cierre queda fuera de Git en
 `runs/20261021_planificador_cierre_publicacion/`.
 
-El borrador sigue pendiente de respuestas y revisión humana. No se implementa
-todavía una CLI de continuación ni se autoriza encadenar desarrollo, evaluación
-o incorporación.
+Al cerrar aquel hito, el borrador seguía pendiente de respuestas y revisión
+humana y todavía no existía una CLI de continuación. Sus resultados no autorizan
+encadenar desarrollo, evaluación o incorporación.
+
+## Continuación con respuestas explícitas
+
+La ampliación posterior parte de `c09cf5ddca749c77da791634890ae1c8712f2f81`
+y conserva el comando inicial. Añade dos modos excluyentes:
+
+```bash
+python3 -B plan_project.py --from-plan REGISTRO --answers-template respuestas.json
+python3 -B plan_project.py --from-plan REGISTRO --answers respuestas.json
+```
+
+`REGISTRO` es el directorio original que contiene `resultado.json` y
+`propuesta.json`, no una propuesta aislada ni una copia reubicada. La exportación
+valida el origen, escribe exclusivamente un archivo nuevo fuera de los registros
+de la cadena y no consulta la CLI, crea registros ni reserva presupuesto. No
+sobrescribe archivos existentes, tampoco enlaces. Guarda la plantilla fuera de
+Git si contiene datos personales; el controlador no modifica las exclusiones.
+
+La segunda operación valida origen y respuestas antes de consultar la CLI o
+reservar. Exige al menos una respuesta no blanca. Crea un registro exclusivo,
+con **una invocación nueva de hasta 300 segundos**, sin reintentos. No consume ni
+reabre reservas de registros anteriores. No admite una solicitud posicional junto
+a `--from-plan`; tampoco admite `--answers` o `--answers-template` por sí solos.
+
+### Plantilla de respuestas v1
+
+El objeto tiene exactamente `version: 1`, `tipo: "respuestas_planificacion"`,
+`origen` y `respuestas`. `origen` contiene exactamente la ruta absoluta `registro`,
+`propuesta_sha256` y `resultado_sha256`. Estos valores los exporta el controlador;
+no deben rellenarse ni modificarse manualmente.
+
+Cada elemento de `respuestas` tiene exactamente `id`, `pregunta` y `respuesta`.
+La plantilla muestra todas las preguntas pendientes con respuesta vacía. Edita
+solo `respuesta`; conserva el conjunto, orden, identificadores y textos de las
+preguntas. No se aceptan claves extra, duplicadas, tipos incorrectos ni texto no
+representable en UTF-8. Los campos vacíos o solo blancos siguen pendientes. Se
+archiva el archivo aportado exactamente, incluidos espacios, Unicode y saltos de
+línea; las respuestas no blancas se conservan sin normalizarlas.
+
+Los identificadores son `r0:p1`, `r0:p2`, etc. para la salida original y
+`r1:p1`, etc. para las nuevas preguntas de la primera revisión. Los elige el
+controlador por profundidad y posición, no el modelo. El origen y sus hashes
+desambiguan revisiones distintas. Las preguntas arrastradas mantienen su ID.
+No se emparejan textos: si el modelo vuelve a formular una pregunta, recibe un
+ID nuevo incluso si el texto coincide. No se infiere que una pregunta antigua
+quedó resuelta por desaparecer, reformularse o repetirse.
+
+### Ejemplo de recorrido, exclusivamente sintético
+
+Supongamos un borrador simulado con estas tres preguntas:
+
+| ID | Pregunta | Respuesta de ejemplo |
+| --- | --- | --- |
+| `r0:p1` | ¿Qué operaciones incluye? | `Consultar` |
+| `r0:p2` | ¿Debe persistir reservas? | vacía |
+| `r0:p3` | ¿Qué interfaz necesita el usuario? | vacía |
+
+Tras exportar la plantilla, el fragmento editable sería:
+
+```json
+"respuestas": [
+  {"id": "r0:p1", "pregunta": "¿Qué operaciones incluye?", "respuesta": "Consultar"},
+  {"id": "r0:p2", "pregunta": "¿Debe persistir reservas?", "respuesta": ""},
+  {"id": "r0:p3", "pregunta": "¿Qué interfaz necesita el usuario?", "respuesta": ""}
+]
+```
+
+Es un fragmento ilustrativo: el archivo real conserva la cabecera exportada con
+los hashes exactos. Si el modelo simulado omite sus preguntas en la nueva salida,
+la revisión continúa en `necesita_aclaraciones`: el controlador conserva
+`r0:p2` y `r0:p3` pendientes y `Consultar` como respuesta explícita a `r0:p1`.
+Una plantilla de esa revisión incluye solo las pendientes. Al contestarlas en
+otra revisión se acumulan las tres respuestas. No se pueden modificar ni volver
+a presentar respuestas ya aportadas en la cadena. Todos estos datos son
+sintéticos; no representan respuestas del usuario al experimento real.
+
+### Datos enviados, procedencia y versiones
+
+El mensaje mantiene `instrucciones` y `materiales`. En las continuaciones añade
+el texto JSON íntegro de `continuacion.json`: `version: 1`,
+`propuesta_anterior_del_modelo`, `preguntas_identificadas`,
+`respuestas_explicitas_del_usuario` acumuladas y `preguntas_sin_responder`.
+Se envían además los textos originales exactos de `solicitud.txt` y
+`contexto.json`, y el esquema v1. No se envían registros completos, canales,
+rutas locales de procedencia, fuentes del proyecto ni configuración personal.
+No hace falta leer archivos mediante herramientas. Las prohibiciones del prompt,
+el adaptador compartido, `--output-schema` y la validación local se mantienen.
+
+La respuesta del modelo **sigue siendo v1**, y se conserva sin introducirle
+respuestas ni preguntas del controlador. Una continuación usa un envoltorio
+`propuesta.json` **v2**, con los campos anteriores más `continuacion`:
+
+- `version: 1` identifica este formato de metadatos de continuidad.
+- `profundidad` y `padre` vinculan la revisión y los hashes de propuesta y resultado.
+- `respuestas_confirmadas` contiene solo respuestas explícitas no blancas del
+  usuario; no incluye supuestos ni interpretaciones del modelo.
+- `pendientes_anteriores` conserva preguntas aún sin contestar del padre.
+- `preguntas_pendientes` une las anteriores y las nuevas preguntas identificadas.
+
+Markdown muestra esos metadatos en una sección separada del texto del modelo.
+El estado es `necesita_aclaraciones` si quedan preguntas del controlador o si
+lo requiere el estado de la respuesta del modelo. Incluso con todas las preguntas
+contestadas, una propuesta es un **borrador no aprobado**: las interpretaciones,
+supuestos y viabilidad siguen sujetos a revisión humana. Ninguna respuesta
+autoriza desarrollo ni convierte un supuesto en decisión confirmada.
+
+`resultado.json` sigue en v1 y añade `commit_controlador`. `procedencia.json`
+registra el commit actual, hashes de las fuentes del controlador y los metadatos
+de continuidad. `commit_base` conserva la base de planificación histórica; no se
+refresca su inventario al HEAD actual. La integridad del árbol actual y su HEAD
+se compara con el inicio de esta ejecución. `respuestas_usuario.json` conserva
+los bytes aportados. Los hashes de cada registro incluyen estos artefactos.
+
+El lector admite originales v1, tanto con materiales en stdin como con el antiguo
+mensaje que pedía leer archivos, y nuevas continuaciones v2. Revalida respuesta,
+propuesta, Markdown, solicitud, contexto, esquema, reserva, estado, materiales y
+sus identidades, entrada y hashes de artefactos. Recorre los padres con un límite;
+rechaza fallos técnicos, ausencias, incoherencias y archivos o directorios enlazados.
+Antes de reservar y después de la invocación también comprueba que los originales
+validados siguen intactos. Los hashes acreditan correspondencia, **no autenticidad
+frente a quien pudiera reescribir coherentemente toda la evidencia**.
+
+### Límites y salidas
+
+Los límites de [project_plan_continuation.py](../project_plan_continuation.py)
+son explícitos y no provocan truncamiento silencioso:
+
+| Recurso | Máximo |
+| --- | --- |
+| Revisiones desde el original | 8; hasta 9 registros en la cadena |
+| Archivo de evidencia leído | 8 MiB |
+| Total de evidencia leída de la cadena | 64 MiB |
+| Artefactos declarados por registro | 64 |
+| Plantilla o archivo de respuestas | 1 MiB |
+| Cada respuesta explícita | 8.000 caracteres, sin NUL |
+| Mensaje completo para una planificación | 4 MiB |
+| Solicitud original / respuesta bruta del modelo | 16.000 caracteres / 1 MiB, como antes |
+
+También se limita el inventario histórico a 10.000 entradas y la lista de
+infraestructura a 1.000 nombres. Un exceso impide la nueva invocación; no se
+omiten padres ni se descarta contexto para encajar. Al alcanzar ocho revisiones
+no se exporta otra plantilla ni se admite otra continuación.
+
+Código **0**: plantilla exportada sin invocación, o borrador generado (incluido
+`necesita_aclaraciones`). Código **1**: origen, respuestas, evidencia, escritura,
+integridad o ejecución inválidos; no hay propuesta nueva parcial. Código **2**:
+combinación de argumentos incorrecta. Los fallos anteriores a crear el registro
+se informan por stderr, sin reserva; los posteriores conservan los canales y
+contadores según el comportamiento del planificador.
+
+### Comprobación de esta ampliación
+
+Las pruebas de [continuación](../tests/test_plan_continuation.py) usan únicamente
+registros temporales sintéticos y comparten la CLI simulada del comando inicial.
+La fixture coteja los materiales recibidos por stdin **antes** de emitir su
+respuesta. Incluyen originales v1, respuestas completas/parciales, dos revisiones,
+preguntas omitidas, cambios de HEAD, identidades, entradas inválidas, límites,
+reservas, fallos y recogida de procesos. No acreditan comprensión semántica.
+El auxiliar se añade a la protección v2; el motor de desarrollo/revisión y el
+adaptador compartido no cambian.
+
+Los comandos, canales, fuentes, demostración y resultados se guardan fuera de
+Git en `runs/20261021_continuacion_planificacion/`. La primera comprobación
+enfocada superó 52 métodos en 12,804 s; se conservó antes de ampliar los controles
+de entradas y límites. La versión ampliada supera **57 métodos enfocados en
+13,815 s**, más tres controles de compatibilidad (configuración v1, configuración
+v2 y adaptador compartido: 0,026 s, 0,063 s y 0,119 s), todos con código 0 y sin
+fallos, errores ni omisiones, en Python 3.12.3. El descubrimiento sin ejecutar
+métodos encuentra **673 identidades únicas**, sin errores. La demostración
+simulada conserva una respuesta y las otras dos preguntas pendientes, con código
+0, sin modelo real, y recoge los temporales.
+
+La **validación integrada local está superada**. La ejecución aportada por el
+usuario en su terminal autorizada, conservada en
+`runs/20261021_continuacion_planificacion/validacion_terminal/`, ejecutó una vez
+`python3 -B -m unittest discover -s tests -v`: **673 métodos, 257,448 s de unittest,
+Python 3.12.3, código 0**, sin fallos, errores ni omisiones. El runner utilizó el
+entorno `evaluation`, límite de 600 s y recogida de procesos; cotejó las 673
+identidades ordenadas y la conservación del árbol y HEAD.
+
+El cierre contrasta canales, inventario, hashes, modos y tamaños con los 158
+archivos actuales, incluido el runner y sus dependencias. La correspondencia
+permite reutilizar esa validación; únicamente se actualizan README y esta guía
+para documentar el resultado. No se repiten suites por esos cambios documentales.
+La evidencia detallada del cierre queda en el registro nuevo excluido de Git
+`runs/20261021_continuacion_planificacion_publicacion/`. Los informes históricos,
+incluido el que dejaba pendiente esta ejecución, permanecen intactos.
+
+La CI automática de la nueva publicación acredita por separado el SHA probado,
+el comando y las identidades ejecutadas. Las validaciones históricas de 650 o
+652 métodos corresponden a sus árboles anteriores. Las pruebas de continuación
+usan una CLI simulada: no acreditan la utilidad semántica de una continuación
+con modelo real, que sigue pendiente de autorización y contraste específico.
+
+No se ejecutan modelos reales ni se implementa promoción a contratos,
+evaluadores o configuraciones, ni incorporación automática.

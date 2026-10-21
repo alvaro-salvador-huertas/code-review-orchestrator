@@ -155,4 +155,6 @@ def render_proposal(proposal):
         section(label, proposal[key])
     for name, value in proposal["propuesta"].items():
         section(name.replace("_", " ").capitalize(), value)
+    if "continuacion" in proposal:
+        section("Continuación del controlador (no texto del modelo)", proposal["continuacion"])
     return "\n".join(lines) + "\n"
