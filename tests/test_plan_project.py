@@ -134,11 +134,26 @@ Path({str(self.tmp / "contexto_visto.json")!r}).write_text(json.dumps(seen))
 message = json.loads(seen["prompt"])
 assert set(message) == {{"instrucciones", "materiales"}}
 assert message["instrucciones"].encode("utf-8") == (log/"materiales/instrucciones.md").read_bytes()
-assert set(message["materiales"]) == {{"solicitud.txt", "contexto.json", "respuesta.schema.json"}}
+names = {{"solicitud.txt", "contexto.json", "respuesta.schema.json"}}
+if (log/"materiales/continuacion.json").exists():
+    names.add("continuacion.json")
+assert set(message["materiales"]) == names
 for name, text in message["materiales"].items():
     assert text.encode("utf-8") == (log/"materiales"/name).read_bytes()
     assert text.encode("utf-8") == Path(name).read_bytes()
 assert Path(args[args.index("--output-schema") + 1]).read_bytes() == message["materiales"]["respuesta.schema.json"].encode("utf-8")
+if "continuacion.json" in names:
+    data = json.loads(message["materiales"]["continuacion.json"])
+    provenance = json.loads((log/"procedencia.json").read_text())["continuacion"]
+    parent = Path(provenance["padre"]["registro"])
+    proposal = json.loads((parent/"propuesta.json").read_text())
+    assert set(data) == {{"version", "propuesta_anterior_del_modelo", "preguntas_identificadas",
+                         "respuestas_explicitas_del_usuario", "preguntas_sin_responder"}}
+    assert data["propuesta_anterior_del_modelo"] == proposal["propuesta"]
+    assert data["respuestas_explicitas_del_usuario"] == provenance["respuestas_confirmadas"]
+    assert data["preguntas_sin_responder"] == provenance["pendientes_anteriores"]
+    for name in ("solicitud.txt", "contexto.json"):
+        assert message["materiales"][name].encode("utf-8") == (parent/"materiales"/name).read_bytes()
 print('{{"type":"turn.completed","simulado":true}}', flush=True)
 print("Diagnóstico de la CLI simulada", file=sys.stderr, flush=True)
 final = Path(args[args.index("--output-last-message") + 1])
@@ -651,7 +666,7 @@ sys.exit(options["code"])
             "prompts": {"desarrollador": "prompts/d.md", "revisor": "prompts/r.md"},
             "referencias": [], "limites_segundos": dict(project_task_config.LIMITS),
         }
-        for name in ("plan_project.py", "project_plan.py"):
+        for name in ("plan_project.py", "project_plan.py", "project_plan_continuation.py"):
             config["archivos_editables"] = [{"ruta": name, "estado_inicial": "ausente"}]
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "infraestructura"):
                 project_task_config.validate_document(config)

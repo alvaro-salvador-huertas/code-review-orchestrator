@@ -13,6 +13,9 @@ from uuid import uuid4
 from case_evidence import digest, read_regular, require
 from project_plan import (MAX_REQUEST, base_context, plan_state, render_proposal,
                           response_schema, validate_response)
+from project_plan_continuation import (CONTROLLER_SOURCES, MAX_ANSWERS, MAX_MESSAGE, continuation_data,
+                                      encoded, export_template, load_parent, model_data,
+                                      questions, regular_bytes)
 from project_task_config import git
 from repair_case import ProcessInterrupted, timestamp, write_json
 from repair_project import tree_state
@@ -63,7 +66,7 @@ def process_failure(agent):
     return None
 
 
-def run_plan(request, project_root=PROJECT):
+def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None):
     started = time.monotonic()
     root = Path(project_root).resolve()
     log = None
@@ -83,6 +86,16 @@ def run_plan(request, project_root=PROJECT):
                 (log / name).unlink(missing_ok=True)
 
     try:
+        parent = None
+        if from_plan is not None:
+            require(request is None and answers is not None, "Continuación exige origen y respuestas, sin solicitud nueva")
+            parent = load_parent(from_plan)
+            answers_raw = regular_bytes(answers, MAX_ANSWERS)
+            continuation = continuation_data(parent, answers_raw)
+            request = parent.proposal["solicitud_original"]
+            result["solicitud_original"] = request
+        else:
+            require(answers is None, "Respuestas requieren --from-plan")
         request_text(request)
         runs = root / "runs"
         require(not runs.is_symlink(), "runs no puede ser un enlace")
@@ -100,8 +113,10 @@ def run_plan(request, project_root=PROJECT):
         (archive / "solicitud.txt").write_text(request, encoding="utf-8")
         save()
         before = tree_state(root, filter_local=True)
-        context = base_context(root)
+        controller_commit = git(root, "rev-parse", "HEAD^{commit}").decode().strip()
+        context = json.loads(parent.materials["contexto.json"]) if parent else base_context(root)
         result["commit_base"] = context["commit_base"]
+        result["commit_controlador"] = controller_commit
         instructions = read_regular(PROMPT)
         require(instructions is not None and instructions.strip(), "Faltan instrucciones de planificación")
         materials = {
@@ -110,15 +125,22 @@ def run_plan(request, project_root=PROJECT):
             "respuesta.schema.json": (json.dumps(response_schema(), ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
             "instrucciones.md": instructions,
         }
+        if parent:
+            # Mantener incluso la representación exacta del contexto histórico.
+            for name in ("solicitud.txt", "contexto.json"):
+                materials[name] = parent.materials[name]
+            materials["continuacion.json"] = encoded(model_data(parent, continuation))
+            (log / "respuestas_usuario.json").write_bytes(answers_raw)
         for name, raw in materials.items():
             (archive / name).write_bytes(raw)
         expected = tree_state(archive)
         # Los textos archivados viajan completos: no requieren herramientas de lectura.
         prompt = (json.dumps({
             "instrucciones": materials["instrucciones.md"].decode("utf-8"),
-            "materiales": {name: materials[name].decode("utf-8") for name in (
-                "solicitud.txt", "contexto.json", "respuesta.schema.json")},
+            "materiales": {name: raw.decode("utf-8") for name, raw in materials.items()
+                           if name != "instrucciones.md"},
         }, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        require(len(prompt) <= MAX_MESSAGE, "Mensaje de planificación supera 4 MiB")
         (agent_log / "entrada.txt").write_bytes(prompt)
         write_json(log / "proyecto_antes.json", before)
         write_json(log / "procedencia.json", {
@@ -126,6 +148,9 @@ def run_plan(request, project_root=PROJECT):
             "solicitud_sha256": digest(request.encode("utf-8")),
             "materiales": expected, "prompt_sha256": digest(prompt),
             "python": sys.version, "politica_entorno": "codex",
+            "controlador": {"commit": controller_commit, "fuentes_sha256": {
+                name: digest(read_regular(PROJECT / name)) for name in CONTROLLER_SOURCES}},
+            "continuacion": continuation if parent else None,
             "nota": "Inventario mínimo de Git, sin fuentes. Directorios y hashes no son un sandbox.",
         })
         temp_root = Path(tempfile.gettempdir()).resolve()
@@ -139,10 +164,12 @@ def run_plan(request, project_root=PROJECT):
             def check_integrity():
                 result["integridad"] = {
                     "proyecto_intacto": tree_state(root, filter_local=True) == before,
-                    "base_intacta": git(root, "rev-parse", "HEAD^{commit}").decode().strip() == context["commit_base"],
+                    "base_intacta": git(root, "rev-parse", "HEAD^{commit}").decode().strip() == controller_commit,
                     "materiales_intactos": tree_state(archive) == expected,
                     "workspace_intacto": tree_state(workspace) == expected,
                 }
+                if parent:
+                    result["integridad"]["origen_intacto"] = parent.intact()
                 if not all(result["integridad"].values()):
                     raise PlanningFailure("integridad", "Cambió el proyecto, la base o los materiales")
 
@@ -160,6 +187,7 @@ def run_plan(request, project_root=PROJECT):
 
             raw = None
             try:
+                check_integrity()  # también antes de consultar versión/ayuda de la CLI
                 result["planificador"] = invoke_read_only(
                     workspace, final, prompt, agent_log, on_invoke=reserve, timeout=PLANNING_SECONDS)
             except ProcessInterrupted as exc:
@@ -186,6 +214,11 @@ def run_plan(request, project_root=PROJECT):
                     "procedencia": {"rol": "planificador", "registro": log.name,
                                     "respuesta_sha256": digest(raw), "requiere_revision_humana": True},
                     "propuesta": plan}
+        if parent:
+            pending = questions(plan, continuation["profundidad"], continuation["pendientes_anteriores"])
+            proposal.update(version=2, continuacion=dict(continuation, preguntas_pendientes=pending))
+            if pending:
+                proposal["estado"] = "necesita_aclaraciones"
         # Preparar ambas representaciones en memoria. Ante cualquier fallo de
         # escritura o de registro se eliminan los dos entregables de este run.
         document = json.dumps(proposal, ensure_ascii=False, indent=2) + "\n"
@@ -198,7 +231,7 @@ def run_plan(request, project_root=PROJECT):
     except KeyboardInterrupt:
         result.update(estado="fallo_tecnico", codigo_salida=1,
                       fallo={"tipo": "interrumpida", "mensaje": "Planificación interrumpida; sin reintento"})
-    except (PlanningFailure, OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (PlanningFailure, OSError, ValueError, RecursionError, subprocess.SubprocessError) as exc:
         result.update(estado="fallo_tecnico", codigo_salida=1,
                       fallo={"tipo": exc.kind if isinstance(exc, PlanningFailure) else "error_controlador",
                              "mensaje": error_text(exc)})
@@ -224,9 +257,27 @@ def main(arguments=None, *, project_root=PROJECT):
     parser = argparse.ArgumentParser(
         description="Una planificación con modelo: borrador revisable, sin desarrollo ni ejecución.",
         allow_abbrev=False)
-    parser.add_argument("solicitud", type=request_text, help="Descripción del trabajo; una única sesión de planificación")
+    parser.add_argument("solicitud", nargs="?", type=request_text, help="Descripción del trabajo; una única sesión de planificación")
+    parser.add_argument("--from-plan", metavar="REGISTRO", help="Registro validado que se continuará")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--answers-template", metavar="ARCHIVO", help="Exportar plantilla sin invocar modelos ni sobrescribir")
+    mode.add_argument("--answers", metavar="ARCHIVO", help="Respuestas explícitas para una nueva planificación")
     args = parser.parse_args(arguments)
-    result = run_plan(args.solicitud, project_root)
+    if args.from_plan:
+        if args.solicitud is not None or not (args.answers_template or args.answers):
+            parser.error("--from-plan exige --answers-template o --answers y excluye una solicitud nueva")
+    elif args.solicitud is None or args.answers_template or args.answers:
+        parser.error("Indica una solicitud, o --from-plan con --answers-template/--answers")
+    if args.answers_template:
+        try:
+            export_template(args.from_plan, args.answers_template)
+        except (OSError, ValueError, RecursionError) as exc:
+            print("Fallo de plantilla:", error_text(exc), file=sys.stderr)
+            return 1
+        print("Plantilla:", args.answers_template)
+        print("Sin invocación ni reserva; respuestas vacías, pendiente de completar.")
+        return 0
+    result = run_plan(args.solicitud, project_root, from_plan=args.from_plan, answers=args.answers)
     stream = sys.stderr if result["codigo_salida"] else sys.stdout
     print("Estado:", result["estado"], file=stream)
     if result["registro"]:
