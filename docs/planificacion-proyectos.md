@@ -685,3 +685,168 @@ de una continuación real con decisiones sigue pendiente** y requiere autorizaci
 expresa y contraste específico. No se han ejecutado modelos reales para este
 cierre ni se convierte el borrador en contratos, evaluadores, configuraciones o
 tareas ejecutables.
+
+## Modelo y esfuerzo por ejecución
+
+`--model` y `--reasoning-effort` son opciones independientes y opcionales para
+una petición inicial o una continuación, incluidas las que combinan respuestas
+y decisiones. Por ejemplo, estos comandos **invocarían** un modelo al ejecutarlos:
+
+```bash
+python3 -B plan_project.py "Descripción del trabajo" --model gpt-6-astra --reasoning-effort medium
+python3 -B plan_project.py --from-plan REGISTRO --decisions decisiones.json --model gpt-6-astra --reasoning-effort medium
+```
+
+Sin opciones se conserva el comando anterior y Codex aplica sus valores de
+configuración habituales. No se leen ni escriben archivos personales para
+seleccionar el modelo. Una continuación no hereda las opciones solicitadas en
+el padre: cada ejecución selecciona las suyas o deja la selección a Codex.
+
+El modelo admite un identificador de 1–200 caracteres ASCII: comienza por letra
+o dígito y continúa con letras, dígitos, `.`, `_`, `:`, `/` o `-`. No se comprueba
+su disponibilidad mediante una llamada. El esfuerzo admite `none`, `minimal`,
+`low`, `medium`, `high`, `xhigh`, `max` y `ultra`; aceptar un valor en el controlador
+no garantiza que todos los modelos o versiones de Codex lo admitan. La
+[referencia oficial de configuración](https://learn.chatgpt.com/docs/config-file/config-reference)
+define `model_reasoning_effort` y advierte que los niveles dependen del modelo
+y cliente. La [ficha de GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra)
+incluye `medium`; no acredita por sí sola acceso desde una cuenta concreta.
+
+Se transmiten argumentos separados, sin shell: `--model`, el identificador,
+`--config` y `model_reasoning_effort="VALOR"`. Las comillas dobles del último
+argumento forman parte del valor TOML que recibe Codex, no de una orden de shell.
+El adaptador compartido incorpora parámetros opcionales; sin ellos produce
+exactamente el mismo argv que antes. Si se solicita modelo, comprueba además
+que la ayuda de la CLI anuncie `--model`, antes de reservar.
+
+Las exportaciones `--answers-template` y `--decisions-template` excluyen ambas
+opciones de ejecución. La CLI rechaza estas combinaciones y argumentos inválidos
+con código 2, antes de leer el origen, consultar Codex o reservar. La API Python
+también valida los valores antes de consultar la CLI. Exportar una plantilla
+sin estas opciones continúa siendo una operación local sin invocación ni reserva.
+
+Cuando se solicita al menos una opción, `resultado.json` y `procedencia.json`
+añaden `opciones_solicitadas`, con `model` y `reasoning_effort`; null significa
+que ese parámetro no se especificó. Son **valores solicitados, no confirmación
+del modelo o esfuerzo efectivamente servido**. El runner conserva el comando
+exacto en `planificador/resultado.json`, también recogido en el resultado general,
+según su comportamiento existente. La selección solicitada se archiva antes de
+la invocación; no se reconstruye un cierre si el proceso no llega a registrarlo.
+Sin opciones no se añade ese campo. Los formatos de propuesta, respuesta y
+continuidad, así como el lector de registros históricos, no cambian.
+
+Se mantienen una única invocación, reserva previa, máximo de 300 s, ausencia de
+reintentos, sandbox de solo lectura, permisos, entorno, validación local e
+integridad. No se añade una selección de modelo a los demás consumidores del
+adaptador ni se cambia la configuración personal de Codex.
+
+### Comprobaciones del 22 de octubre
+
+La CLI instalada `codex-cli 0.162.1` anuncia `--model` y `--config`. Versión,
+ayuda y ayuda con las dos opciones solicitadas terminaron con código 0, sin
+llamada al modelo. Las tres consultas emitieron un aviso EROFS al preparar
+alias de PATH; se conserva el aviso, sin cambiar permisos ni atribuirle la
+causa de ejecuciones anteriores. `--help` acredita sintaxis, no que un modelo
+esté disponible ni qué esfuerzo aplicaría el servicio.
+
+La [fixture](../tests/test_plan_execution_options.py) exige el argv exacto antes
+de emitir una respuesta prefijada, además de las comprobaciones previas de
+stdin. Cubre ambas opciones, opciones individuales, ausencia de opciones,
+argumentos inválidos, exportaciones, ayuda incompatible, continuación con
+respuestas/decisiones y no herencia de selección. Una prueba que altera lo
+esperado por la fixture verifica que esta no emite respuesta. Se conserva el
+fallo previo: un método, código 1, porque la CLI del planificador todavía
+rechazaba las opciones nuevas con código 2.
+
+Validación con Python 3.12.3, respuestas simuladas y sin modelos reales:
+
+| Comprobación | Métodos | Tiempo unittest |
+| --- | --- | --- |
+| Suite enfocada `test_plan*.py` | 82 | 30,873 s |
+| `test_review_case.py` | 28 | 7,672 s |
+| `test_review_project.py` | 23 | 4,677 s |
+| `test_process_environment.py` | 9 | 2,244 s |
+| Configuración v1: dos tareas con archivo existente/ausente | 1 | 2,325 s |
+| Configuración v2: varios archivos y materiales de revisión | 1 | 2,129 s |
+
+Los 144 métodos terminaron correctamente, sin errores, fallos ni omisiones.
+El cierre cotejó canales, identidades, hashes, fuentes y dependencias; la evidencia
+previa permanece intacta en `runs/20261022_planificador_modelo_esfuerzo/`, fuera
+de Git. La revisión posterior detectó que una plantilla con ruta vacía podía
+confundirse con una petición inicial, incluso al combinarla con `--model`.
+Una reproducción simulada conservada falló antes de corregirlo: un método,
+código 1, seis combinaciones y la comprobación de no iniciar planificación.
+Ahora la CLI rechaza la ruta vacía con código 2 antes de consultar o reservar.
+
+Después de esa corrección mínima pasaron **12 métodos afectados, 4,606 s, código
+0**, sin errores, fallos ni omisiones: los nueve de opciones de ejecución y tres
+de argumentos/exportación de las interfaces anteriores. Las **82 enfocadas
+anteriores se conservan como resultado previo**, no como una ejecución del parser
+corregido. Se reutilizan las **62 de compatibilidad**: el adaptador compartido,
+sus consumidores evaluados y sus dependencias no cambiaron con este rechazo.
+La guía se actualiza después de esas comprobaciones.
+
+### Continuación real contrastada y validación integrada
+
+La ejecución aportada por el usuario del **22 de octubre, 15:49:13 UTC**, con
+opciones solicitadas **`gpt-6-astra` / `medium`**, terminó en **`borrador`, código
+0**, con una invocación de **148,389 s** (148,668 s del controlador). Se leyó su
+registro, sin lanzar otra planificación. El lector existente validó la cadena,
+los hashes de materiales, la respuesta y las propuestas JSON/Markdown; el mensaje
+incluido en eventos coincide exactamente con la respuesta archivada. Las fuentes
+registradas coincidían con las del cotejo inicial; la única corrección posterior
+del controlador es el rechazo de plantillas con ruta vacía descrito arriba. No
+modifica la entrega de materiales ni el argv de esta continuación válida. Esto
+acredita estructura y correspondencia, separadamente del contraste semántico.
+
+El borrador conserva **seis respuestas y cinco decisiones explícitas**, sin
+preguntas ni supuestos pendientes. Adopta `/availability`, el objeto `solicitud`
+y el campo `recurso`, fechas estrictas con `Z` y la precedencia HTTP aportada;
+mantiene la consulta sin persistencia y delegación en `booking_core.check_booking`.
+Excluye modificar `booking_core.py` y `check_booking.py`. Solo contempla eventuales
+ajustes de `booking_http.py` cuya necesidad se demuestre con la lectura del código
+y una revisión posterior. Reconoce que el inventario no acredita comportamiento
+ni modo actual. **Es un borrador útil para revisión en este caso, no aprobación
+ni autorización de desarrollo**, y una ejecución no demuestra fiabilidad general.
+
+El SHA-256 del mensaje de entrada es
+`d0c984fc42d6f35b4209e4041d6af05da6b11e3ff559c2cb2ade65703ee2bf93`:
+coincide byte a byte con el intento del mismo día a las 13:49:54 UTC, que conserva
+su estado de fallo técnico por timeout de 300 s y código 1. Ese comando anterior
+no fijaba modelo ni esfuerzo por argv; **no se demuestra que `xhigh` causara el
+timeout**. Los eventos del intento completado tampoco confirman por separado el
+modelo y esfuerzo efectivamente servidos. La integridad histórica del workspace
+temporal, ya eliminado, sigue siendo la declarada por el controlador; el cotejo
+actual acredita solo los archivos y hashes que se conservan.
+
+La terminal autorizada del usuario superó la **regresión integrada de 699 métodos,
+355,530 s de unittest, Python 3.12.3, código 0**, sin fallos, errores ni omisiones.
+Ejecutó una vez `python3 -B -m unittest discover -s tests -v` mediante
+`repair_case.run_process`, entorno `evaluation` y límite de 600 s. El cotejo de
+publicación verificó canales, manifiesto, inventario, identidades ordenadas y los
+160 archivos evaluados, incluidos fuentes, pruebas y dependencias. El controlador
+registró árbol y HEAD conservados; el cotejo actual los confirmó antes de esta
+actualización documental. **La guía y la descripción de PR se actualizaron después
+de la suite**; el código no cambió y se reutiliza la validación sin repetirla.
+
+Hay una discrepancia temporal conservada: entre `16:21:05.305433Z` y
+`16:50:56.024676Z` del 22 de octubre transcurren **1790,719243 s según las marcas
+UTC**, frente a **355,964983946 s registrados por el proceso**. El runner mide
+duración con `time.monotonic()` y obtiene las marcas UTC mediante
+`datetime.now(timezone.utc)`; unittest usa `time.perf_counter()` y el plazo de
+`subprocess.communicate` usa un reloj monotónico. Son medidas distintas. No hay
+evidencia suficiente para atribuir la divergencia a suspensión o ajuste de reloj,
+ni para afirmar un plazo inferior a 600 s entre las marcas UTC. La discrepancia
+no invalida por sí sola los canales y las demás comprobaciones de esta ejecución;
+no se altera el registro original.
+
+La ejecución real anterior sigue acreditando la versión previa al rechazo de
+plantilla vacía; esta regresión posterior sí incluye esa corrección y utiliza
+modelos simulados en las pruebas del planificador. La CI automática de la
+publicación se comprueba separadamente sobre su SHA e identidades, sin atribuirle
+resultados de publicaciones anteriores ni solicitar otra planificación real.
+
+El contraste y la validación original se conservan en
+`runs/20261022_planificador_modelo_esfuerzo_cierre/`; el cotejo de publicación y la
+explicación temporal, en `runs/20261022_planificador_modelo_esfuerzo_publicacion/`.
+Ambos registros quedan excluidos de Git.

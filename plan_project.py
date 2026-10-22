@@ -20,6 +20,7 @@ from project_task_config import git
 from repair_case import ProcessInterrupted, timestamp, write_json
 from repair_project import tree_state
 from review_case import invoke_reviewer as invoke_read_only
+from review_case import REASONING_EFFORTS, codex_model_options
 
 
 PROJECT = Path(__file__).resolve().parent
@@ -48,6 +49,14 @@ def error_text(error):
     return str(error).encode("utf-8", errors="backslashreplace").decode("utf-8")
 
 
+def model_argument(value):
+    try:
+        codex_model_options(model=value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return value
+
+
 def process_failure(agent):
     if agent.get("error_registro"):
         return "error_registro"
@@ -66,7 +75,8 @@ def process_failure(agent):
     return None
 
 
-def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, decisions=None):
+def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, decisions=None,
+             model=None, reasoning_effort=None):
     started = time.monotonic()
     root = Path(project_root).resolve()
     log = None
@@ -86,6 +96,9 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, dec
                 (log / name).unlink(missing_ok=True)
 
     try:
+        options = codex_model_options(model=model, reasoning_effort=reasoning_effort)
+        if options:
+            result["opciones_solicitadas"] = {"model": model, "reasoning_effort": reasoning_effort}
         parent = None
         if from_plan is not None:
             require(request is None and (answers is not None or decisions is not None),
@@ -155,6 +168,7 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, dec
             "controlador": {"commit": controller_commit, "fuentes_sha256": {
                 name: digest(read_regular(PROJECT / name)) for name in CONTROLLER_SOURCES}},
             "continuacion": continuation if parent else None,
+            **({"opciones_solicitadas": result["opciones_solicitadas"]} if options else {}),
             "nota": "Inventario mínimo de Git, sin fuentes. Directorios y hashes no son un sandbox.",
         })
         temp_root = Path(tempfile.gettempdir()).resolve()
@@ -193,7 +207,8 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, dec
             try:
                 check_integrity()  # también antes de consultar versión/ayuda de la CLI
                 result["planificador"] = invoke_read_only(
-                    workspace, final, prompt, agent_log, on_invoke=reserve, timeout=PLANNING_SECONDS)
+                    workspace, final, prompt, agent_log, on_invoke=reserve, timeout=PLANNING_SECONDS,
+                    **({"model": model, "reasoning_effort": reasoning_effort} if options else {}))
             except ProcessInterrupted as exc:
                 result["planificador"] = dict(exc.result, invocaciones=result["invocaciones"]["planificador"])
                 raise
@@ -270,11 +285,18 @@ def main(arguments=None, *, project_root=PROJECT):
     mode.add_argument("--decisions-template", metavar="ARCHIVO", help="Exportar plantilla de decisiones sobre supuestos")
     parser.add_argument("--answers", metavar="ARCHIVO", help="Respuestas explícitas para una nueva planificación")
     parser.add_argument("--decisions", metavar="ARCHIVO", help="Decisiones explícitas; se puede combinar con --answers")
+    parser.add_argument("--model", type=model_argument, help="Modelo solicitado solo para esta ejecución")
+    parser.add_argument("--reasoning-effort", choices=REASONING_EFFORTS,
+                        help="Esfuerzo solicitado solo para esta ejecución; compatibilidad dependiente del modelo y CLI")
     args = parser.parse_args(arguments)
+    if args.answers_template == "" or args.decisions_template == "":
+        parser.error("La ruta de la plantilla no puede estar vacía")
     exporting = args.answers_template or args.decisions_template
     continuing = args.answers or args.decisions
     if exporting and continuing:
         parser.error("Exportar una plantilla excluye --answers y --decisions")
+    if exporting and (args.model is not None or args.reasoning_effort is not None):
+        parser.error("Exportar una plantilla excluye --model y --reasoning-effort")
     if args.from_plan:
         if args.solicitud is not None or not (exporting or continuing):
             parser.error("--from-plan exige una plantilla, --answers o --decisions y excluye una solicitud nueva")
@@ -289,7 +311,8 @@ def main(arguments=None, *, project_root=PROJECT):
         print("Plantilla:", exporting)
         print("Sin invocación ni reserva; pendiente de completar por el usuario.")
         return 0
-    result = run_plan(args.solicitud, project_root, from_plan=args.from_plan, answers=args.answers, decisions=args.decisions)
+    result = run_plan(args.solicitud, project_root, from_plan=args.from_plan, answers=args.answers, decisions=args.decisions,
+                      model=args.model, reasoning_effort=args.reasoning_effort)
     stream = sys.stderr if result["codigo_salida"] else sys.stdout
     print("Estado:", result["estado"], file=stream)
     if result["registro"]:
