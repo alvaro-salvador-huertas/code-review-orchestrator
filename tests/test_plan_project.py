@@ -147,8 +147,15 @@ if "continuacion.json" in names:
     provenance = json.loads((log/"procedencia.json").read_text())["continuacion"]
     parent = Path(provenance["padre"]["registro"])
     proposal = json.loads((parent/"propuesta.json").read_text())
-    assert set(data) == {{"version", "propuesta_anterior_del_modelo", "preguntas_identificadas",
-                         "respuestas_explicitas_del_usuario", "preguntas_sin_responder"}}
+    fields = {{"version", "propuesta_anterior_del_modelo", "preguntas_identificadas",
+               "respuestas_explicitas_del_usuario", "preguntas_sin_responder"}}
+    if data["version"] == 2:
+        fields.update(("supuestos_identificados", "decisiones_explicitas_del_usuario", "supuestos_sin_decidir"))
+        assert data["supuestos_sin_decidir"] == provenance["supuestos_anteriores"]
+        assert data["decisiones_explicitas_del_usuario"] == [
+            {{k: item[k] for k in ("id", "supuesto", "decision", "explicacion", "alternativa")}}
+            for item in provenance["decisiones_confirmadas"]]
+    assert set(data) == fields
     assert data["propuesta_anterior_del_modelo"] == proposal["propuesta"]
     assert data["respuestas_explicitas_del_usuario"] == provenance["respuestas_confirmadas"]
     assert data["preguntas_sin_responder"] == provenance["pendientes_anteriores"]

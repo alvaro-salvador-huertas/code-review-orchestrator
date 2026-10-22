@@ -99,7 +99,7 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(result["estado"], "necesita_aclaraciones")
         proposal = self.saved(result)
         self.assertEqual(proposal["propuesta"], initial.concrete())
-        self.assertEqual(proposal["version"], 2)
+        self.assertEqual(proposal["version"], 3)
         meta = proposal["continuacion"]
         self.assertEqual(meta["respuestas_confirmadas"][0]["respuesta"], text)
         self.assertEqual([q["id"] for q in meta["preguntas_pendientes"]], ["r0:p2", "r0:p3"])
@@ -119,19 +119,20 @@ class ContinuationTests(unittest.TestCase):
         self.assertFalse(result["aprobada"])
         self.assertEqual(continuity.load_parent(log).answers, meta["respuestas_confirmadas"])
 
-    def test_completas_son_borrador_no_aprobacion_y_supuestos_no_confirmados(self):
+    def test_completas_no_resuelven_supuestos_ni_aprueban(self):
         parent = self.origin()
         answers = self.answers(parent, "Consultar", "En memoria", "Funciones")
-        for assumptions, state in (([], "borrador"), (["Supuesto del modelo"], "necesita_aclaraciones")):
+        for assumptions in ([], ["Supuesto del modelo"]):
             plan = initial.concrete()
             plan["supuestos"] = assumptions
             self.configure(plan=plan)
             result = self.continue_plan(parent, answers)
-            self.assertEqual(result["estado"], state, result)
+            self.assertEqual(result["estado"], "necesita_aclaraciones", result)
             self.assertFalse(result["aprobada"])
             meta = self.saved(result)["continuacion"]
             self.assertEqual(meta["preguntas_pendientes"], [])
             self.assertEqual(len(meta["respuestas_confirmadas"]), 3)
+            self.assertEqual(meta["supuestos_pendientes"][0]["id"], "r0:s1")
 
     def test_dos_continuaciones_acumulan_sin_sustituir_ni_refrescar_contexto(self):
         parent = self.origin()
