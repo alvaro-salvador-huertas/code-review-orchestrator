@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import time
@@ -22,6 +23,7 @@ from case_evidence import (
 
 
 CODEX_EXECUTABLE = "codex"
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 INTEGRITY_KEYS = (
     "pruebas_agente_intactas", "originales_intactos", "referencia_intacta",
     "pruebas_iniciales_pruebas_intactas", "pruebas_iniciales_implementacion_intacta",
@@ -289,8 +291,25 @@ def validate_verdict(raw, line_count):
     return verdict
 
 
-def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None, timeout=None):
+def codex_model_options(*, model=None, reasoning_effort=None):
+    """Validar selecciones explícitas sin consultar modelos ni configuración personal."""
+    require(model is None or (type(model) is str and
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model)),
+            "Modelo inválido: usa un identificador de hasta 200 caracteres ASCII, sin espacios ni opciones")
+    require(reasoning_effort is None or (type(reasoning_effort) is str and reasoning_effort in REASONING_EFFORTS),
+            "Esfuerzo no admitido: " + ", ".join(REASONING_EFFORTS))
+    options = []
+    if model is not None:
+        options += ["--model", model]
+    if reasoning_effort is not None:
+        options += ["--config", "model_reasoning_effort=" + json.dumps(reasoning_effort)]
+    return options
+
+
+def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None, timeout=None,
+                    model=None, reasoning_effort=None):
     """Una sesión nueva de Codex: sin resume, fork ni llamada al desarrollador."""
+    options = codex_model_options(model=model, reasoning_effort=reasoning_effort)
     result = {"estado": "cli_no_disponible", "codigo_salida": None, "invocaciones": 0}
     for name, args in (("version", ["--version"]), ("ayuda", ["exec", "--help"])):
         check = run_process([CODEX_EXECUTABLE] + args, workspace, log_dir / name,
@@ -306,6 +325,8 @@ def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None, t
     help_text = output.decode("utf-8", errors="replace")
     required = ("--config", "--sandbox", "read-only", "--cd", "--skip-git-repo-check",
                 "--ephemeral", "--json", "--output-last-message", "--output-schema")
+    if model is not None:
+        required += ("--model",)
     if any(option not in help_text for option in required):
         result["estado"] = "cli_incompatible"
         return result
@@ -315,7 +336,7 @@ def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None, t
         "--config", "features.multi_agent=false",
         "--cd", str(workspace), "--skip-git-repo-check", "--ephemeral", "--json",
         "--output-schema", str(workspace / "respuesta.schema.json"),
-        "--output-last-message", str(final_path), "-",
+        "--output-last-message", str(final_path), *options, "-",
     ]
     if on_invoke is not None:
         on_invoke()

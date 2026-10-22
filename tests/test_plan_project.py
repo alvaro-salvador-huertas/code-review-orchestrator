@@ -23,7 +23,7 @@ from repair_case import ProcessInterrupted
 from repair_project import tree_state
 
 
-HELP = "--config --sandbox read-only --cd --skip-git-repo-check --ephemeral --json --output-last-message --output-schema"
+HELP = "--model --config --sandbox read-only --cd --skip-git-repo-check --ephemeral --json --output-last-message --output-schema"
 
 
 def concrete():
@@ -92,9 +92,11 @@ class PlanningTests(unittest.TestCase):
             return subprocess.run(["git", "-C", str(self.root), *args], env=environment,
                                   capture_output=True, check=True, timeout=10).stdout
 
-    def configure(self, *, plan=None, raw=None, mode="normal", code=0):
+    def configure(self, *, plan=None, raw=None, mode="normal", code=0,
+                  model=None, reasoning_effort=None, cli_help=HELP):
         self.settings.write_text(json.dumps({"raw": json.dumps(concrete() if plan is None else plan)
-                                            if raw is None else raw, "mode": mode, "code": code}))
+                                            if raw is None else raw, "mode": mode, "code": code,
+                                            "model": model, "reasoning_effort": reasoning_effort}))
         self.fake.write_text(f'''#!{sys.executable}
 import json, os, sys, time
 from pathlib import Path
@@ -108,7 +110,7 @@ if args == ["--version"]:
     if mode == "version_timeout": time.sleep(60)
     sys.exit(7 if mode == "version_fail" else 0)
 if args == ["exec", "--help"]:
-    print("incompatible" if mode == "incompatible" else {HELP!r}, flush=True)
+    print("incompatible" if mode == "incompatible" else {cli_help!r}, flush=True)
     if mode == "vanish": Path(sys.argv[0]).unlink()
     if mode == "tamper_help": Path("solicitud.txt").write_text("alterado antes de reservar")
     sys.exit(0)
@@ -119,6 +121,17 @@ assert "--ephemeral" in args and "--json" in args
 assert "resume" not in args and "fork" not in args
 assert 'approval_policy="never"' in args and 'web_search="disabled"' in args
 assert "features.multi_agent=false" in args
+# Comprobar argv antes de emitir la respuesta prefijada, no solo el workspace.
+if options["model"] is None:
+    assert "--model" not in args
+else:
+    assert args.count("--model") == 1
+    assert args[args.index("--model") + 1] == options["model"]
+configs = [args[i + 1] for i, arg in enumerate(args) if arg == "--config"]
+expected_configs = ['approval_policy="never"', 'web_search="disabled"', "features.multi_agent=false"]
+if options["reasoning_effort"] is not None:
+    expected_configs.append("model_reasoning_effort=" + json.dumps(options["reasoning_effort"]))
+assert configs == expected_configs
 root = Path({str(self.root)!r})
 logs = [p for p in (root/"runs").iterdir() if "_plan_project_" in p.name]
 log = max(logs, key=lambda p: p.stat().st_mtime_ns)
