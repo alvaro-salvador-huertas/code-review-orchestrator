@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "identificador": "booking-batch",
+  "commit_base": "9017d6ca212af4447c02da22c0bcd9a5364f6924",
+  "contrato": "tasks/008-booking-batch.md",
+  "archivos_editables": [
+    {"ruta": "booking_batch.py", "estado_inicial": "ausente"}
+  ],
+  "evaluador_aceptacion": "evals/tareas_reales/booking_batch/evaluar.py",
+  "prompts": {
+    "desarrollador": "prompts/developer_booking_batch_flow.md",
+    "revisor": "prompts/reviewer_booking_batch_flow.md"
+  },
+  "referencias": ["booking_core.py", "tasks/005-check-booking.md", "tasks/006-booking-core.md"],
+  "limites_segundos": {
+    "desarrollador": 300,
+    "revisor": 300,
+    "aceptacion": 120,
+    "regresion": 600,
+    "inventario": 30,
+    "consulta_cli": 10
+  }
+}
