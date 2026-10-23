@@ -388,6 +388,22 @@ reúne ambos cambios; su CI automática se comprueba por separado sobre el commi
 publicado y no se deduce del resultado local. Se conservan las autoridades
 congeladas y `network_access=false`.
 
+La [tarea 008 booking-batch](evals/tareas_reales/booking_batch/README.md) incorpora
+una CLI de consultas independientes por lotes, delegadas en `booking_core`:
+`python3 -B booking_batch.py [--] archivo`. Lee una lista JSON UTF-8 y devuelve
+los resultados en orden, sin salida parcial ante errores de entrada. El primer
+experimento terminó listo para revisión humana: un desarrollo y una revisión,
+25 métodos de aceptación y 699 de regresión correctos, dictamen `aprobar`.
+La incorporación local posterior fue autorizada expresamente; no la realizó
+el orquestador ni la autorizó el borrador del planificador. El candidato exacto
+y los adaptadores permanentes superaron juntos 49 métodos. La suite integrada
+posterior, ejecutada en la terminal del usuario, superó **748 métodos en
+414,514 s de unittest**, código 0 y sin omisiones. Se cotejaron canales, hashes,
+identidades exactas y conservación comprobada por el runner; se reutiliza esa
+validación para este cierre exclusivamente documental, sin repetir pruebas.
+**CI y publicación siguen pendientes.**
+La guía conserva la preparación sin producto y los límites de este único caso.
+
 El flujo `inspect-json` se comprobó inicialmente con agentes simulados y reproduce la base
 conocida del contrato 003,
 aunque `main` ya tenga JSON. Cada candidato debe superar aceptación revisada,
