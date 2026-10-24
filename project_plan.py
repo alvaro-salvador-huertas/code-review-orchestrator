@@ -3,12 +3,16 @@
 import json
 import re
 
-from case_evidence import parse_json, require
+from case_evidence import digest, parse_json, require
 from project_task_config import PROTECTED, fields, git, relative_path
 
 
 MAX_REQUEST = 16000
 MAX_RESPONSE = 1048576
+MAX_REFERENCES = 16
+MAX_REFERENCE_BYTES = 128 * 1024
+MAX_REFERENCES_BYTES = 1024 * 1024
+REFERENCE_FIELDS = ("ruta", "commit", "modo", "bytes", "sha256")
 PYTHON_FILE = r"[A-Za-z_][A-Za-z0-9_]*\.py"
 RESTRICTIONS = {
     "archivos": "Solo archivos Python regulares de la raíz, creados o modificados; sin borrados.",
@@ -57,9 +61,9 @@ def response_schema():
     })
 
 
-def base_context(root):
+def base_context(root, *, base=None):
     """Solo nombres y tipos del árbol Git: no leer fuentes para el modelo."""
-    base = git(root, "rev-parse", "HEAD^{commit}").decode().strip()
+    base = base if base is not None else git(root, "rev-parse", "HEAD^{commit}").decode().strip()
     require(re.fullmatch(r"[0-9a-f]{40}", base), "Base Git inválida")
     inventory = []
     for entry in git(root, "ls-tree", "-z", base).split(b"\0"):
@@ -75,6 +79,99 @@ def base_context(root):
                           "protegido": name in PROTECTED})
     return {"commit_base": base, "inventario_python": inventory,
             "restricciones": RESTRICTIONS}
+
+
+def reference_path(value):
+    name = relative_path(value)
+    require(("/" not in name and name.endswith(".py")) or name == "README.md"
+            or (name.startswith(("tasks/", "docs/")) and name.endswith(".md")),
+            "Referencia fuera del alcance: Python raíz, README.md o Markdown bajo tasks/docs")
+    return name
+
+
+def reference_paths(names):
+    require(type(names) in (list, tuple) and len(names) <= MAX_REFERENCES,
+            "Se admiten como máximo 16 referencias")
+    selected = [reference_path(name) for name in names]
+    require(len(set(selected)) == len(selected), "Referencias duplicadas")
+    return selected
+
+
+def read_references(root, base, names):
+    """Resolver solo rutas explícitas en Git; consultar todos los tamaños antes de blobs."""
+    require(type(base) is str and re.fullmatch(r"[0-9a-f]{40}", base), "Commit de referencias inválido")
+    selected = reference_paths(names)
+    require(selected, "Faltan referencias seleccionadas")
+    pending, total = [], 0
+    for name in selected:
+        tree = base
+        parts = name.split("/")
+        for index, part in enumerate(parts):
+            entries = git(root, "--literal-pathspecs", "ls-tree", "-z", tree, "--", part).split(b"\0")
+            require(len(entries) == 2 and entries[1] == b"", "Referencia ausente en la base: " + name)
+            metadata, found = entries[0].split(b"\t", 1)
+            mode, kind, oid = metadata.decode("ascii").split()
+            require(found.decode("utf-8") == part, "Ruta Git distinta de la solicitada")
+            if index < len(parts) - 1:
+                require(mode == "040000" and kind == "tree", "Componente no directorio Git: " + name)
+                tree = oid
+            else:
+                require(kind == "blob" and mode in ("100644", "100755"),
+                        "Referencia no regular en Git: " + name)
+        size = int(git(root, "cat-file", "-s", oid).decode("ascii"))
+        require(0 <= size <= MAX_REFERENCE_BYTES, "Referencia supera 128 KiB: " + name)
+        total += size
+        require(total <= MAX_REFERENCES_BYTES, "Referencias superan 1 MiB en conjunto")
+        pending.append((name, oid, int(mode[-3:], 8), size))
+    documents = []
+    for name, oid, mode, size in pending:
+        raw = git(root, "cat-file", "blob", oid)
+        require(len(raw) == size, "Tamaño del blob distinto del comprobado")
+        documents.append({"ruta": name, "commit": base, "modo": mode, "bytes": size,
+                          "sha256": digest(raw), "contenido": raw.decode("utf-8")})
+    return {"version": 1, "archivos": documents}
+
+
+def validate_reference_metadata(items, base):
+    require(type(items) is list and 1 <= len(items) <= MAX_REFERENCES,
+            "Inventario de referencias inválido")
+    total, names = 0, []
+    for item in items:
+        fields(item, REFERENCE_FIELDS, "identidad de referencia")
+        names.append(reference_path(item["ruta"]))
+        require(item["commit"] == base, "Referencia de otro commit")
+        require(type(item["modo"]) is int and item["modo"] in (0o644, 0o755), "Modo de referencia inválido")
+        require(type(item["bytes"]) is int and 0 <= item["bytes"] <= MAX_REFERENCE_BYTES,
+                "Tamaño de referencia inválido")
+        require(type(item["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", item["sha256"]),
+                "SHA-256 de referencia inválido")
+        total += item["bytes"]
+    require(total <= MAX_REFERENCES_BYTES, "Referencias superan 1 MiB en conjunto")
+    reference_paths(names)
+
+
+def validate_reference_material(raw, context):
+    """Autoconsistencia archivada, sin consultar Git ni autenticar al autor."""
+    if "referencias" not in context:
+        require(raw is None, "Referencias sin inventario explícito")
+        return
+    require(raw is not None, "Faltan textos de referencia")
+    value = parse_json(raw)
+    fields(value, ("version", "archivos"), "material de referencias")
+    require(type(value["version"]) is int and value["version"] == 1, "Versión de referencias inválida")
+    require(type(value["archivos"]) is list and len(value["archivos"]) == len(context["referencias"]),
+            "Conjunto de textos de referencia distinto")
+    validate_reference_metadata(context["referencias"], context["commit_base"])
+    for item, metadata in zip(value["archivos"], context["referencias"]):
+        fields(item, (*REFERENCE_FIELDS, "contenido"), "documento de referencia")
+        identity = {key: item[key] for key in REFERENCE_FIELDS}
+        validate_reference_metadata([identity], context["commit_base"])
+        require(identity == metadata,
+                "Identidad del documento distinta del contexto")
+        require(type(item["contenido"]) is str, "Contenido de referencia no textual")
+        content = item["contenido"].encode("utf-8")
+        require(len(content) == metadata["bytes"] and digest(content) == metadata["sha256"],
+                "Contenido de referencia alterado")
 
 
 def validate_schema(value, schema):

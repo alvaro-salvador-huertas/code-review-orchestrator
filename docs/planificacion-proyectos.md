@@ -13,12 +13,13 @@ con una CLI simulada y un contraste real favorable para una petición abierta de
 API de reservas. Un caso no acredita fiabilidad general ni aprueba el borrador.
 `python3 -B plan_project.py --help` no invoca modelos ni crea registros.
 
-El controlador fija la petición original y el commit `HEAD` de la base. El modelo
-recibe únicamente petición, instrucciones, restricciones, esquema y nombres/tipos
-de los archivos Python de la raíz de esa base. No recibe fuentes del proyecto,
-registros privados ni configuración personal. Los cambios pendientes se conservan,
-pero no forman parte del inventario de la base. Sin las fuentes, inferir el
-comportamiento de un módulo por su nombre no constituye un hecho comprobado.
+El controlador fija la petición original y el commit `HEAD` de la base. Sin
+`--reference`, el modelo recibe petición, instrucciones, restricciones, esquema y
+nombres/tipos de los archivos Python de la raíz de esa base, sin sus fuentes.
+La selección explícita permite añadir los documentos descritos a continuación;
+no explora otras fuentes, registros privados ni configuración personal.
+Los cambios pendientes se conservan, pero no se entregan al modelo. Sin las fuentes,
+inferir el comportamiento de un módulo por su nombre no constituye un hecho comprobado.
 
 El stdin enviado al adaptador es un único objeto JSON con `instrucciones` y
 `materiales`. Este último contiene los textos UTF-8 íntegros de `solicitud.txt`,
@@ -27,6 +28,97 @@ archivan. La serialización conserva comillas, Unicode y saltos de línea sin
 confundir el texto del usuario con delimitadores. El modelo dispone de los datos
 en el mensaje y no necesita herramientas de lectura. Se mantienen el esquema
 por `--output-schema`, la validación local y `planificador/entrada.txt` con su hash.
+
+## Referencias explícitas de lectura
+
+Al iniciar, puedes repetir `--reference RUTA`. Por ejemplo, **este comando
+invocaría un modelo real** si decides ejecutarlo:
+
+```bash
+python3 -B plan_project.py "Contrasta una propuesta de consulta con el contrato" \
+  --reference booking_core.py --reference tasks/006-booking-core.md
+```
+
+Cada ruta se resuelve en el mismo commit base fijado para el inventario. Se leen
+los blobs de Git, nunca el contenido ni los permisos del checkout; un cambio local
+o un archivo sin commit no reemplazan una referencia. Solo se admiten archivos
+regulares `.py` de la raíz, `README.md` y `.md` bajo `tasks/` o `docs/`. Las rutas
+deben ser relativas y canónicas, sin componentes ocultos o privados, `.` ni `..`,
+separadores duplicados o inversos. Se rechazan duplicados, ausencias, directorios,
+enlaces y submódulos, también en componentes intermedios del árbol Git. Los
+nombres se consultan literalmente, sin expandir patrones.
+
+El máximo es **16 referencias, 128 KiB por archivo y 1 MiB total**, contado en
+bytes UTF-8. Se comprueban todos los tamaños antes de cargar los blobs; un texto
+que no sea UTF-8 válido se rechaza. Se conserva además el límite de **4 MiB del
+mensaje completo**: el escape JSON puede alcanzar ese límite antes que el de
+contenidos. Toda referencia inválida se rechaza antes de consultar la versión o
+ayuda de Codex y antes de reservar una invocación.
+
+`materiales/referencias.json` guarda `version: 1` y una lista `archivos`, en el
+orden solicitado. Cada entrada contiene `ruta`, `commit`, `modo` (entero de
+permisos Git, 0644 o 0755), `bytes`, `sha256` del contenido UTF-8 y `contenido`
+íntegro. `contexto.json.referencias` repite las identidades sin el texto. El JSON
+de referencias viaja como texto completo en `materiales["referencias.json"]`
+del stdin, obtenido de los mismos bytes archivados. Se conservan Unicode,
+comillas, CRLF y texto que parezca un delimitador. No se solicita abrir archivos.
+
+Las instrucciones, la solicitud y los documentos ocupan campos distintos.
+Consultar un documento no autoriza modificarlo ni ejecutar su contenido: siguen
+vigentes los archivos protegidos, el alcance de Python raíz y biblioteca estándar,
+la prohibición de comandos, código, pruebas y agentes, y la revisión humana del
+borrador. Esta separación **no garantiza resistencia a instrucciones maliciosas**
+dentro de los textos ni acredita la veracidad de su contenido.
+
+`--reference` es incompatible con `--from-plan` y las exportaciones de plantillas.
+Una continuación hereda los bytes exactos de `referencias.json` de su origen,
+incluido el commit original, aunque cambien HEAD o el checkout. El lector valida
+conjunto, metadatos, tamaños, hashes, textos y correspondencia con stdin y contexto;
+también coteja la igualdad exacta entre generaciones. No reconsulta las fuentes.
+Los registros históricos sin referencias conservan sus materiales anteriores y su
+lectura; el esquema de respuesta v1 no cambia. Sin la opción no se añade material
+de referencias. Las opciones de modelo/esfuerzo, reserva previa, máximo de una
+invocación de 300 s y ausencia de reintentos permanecen iguales.
+
+Validación local de este cambio (Python 3.12.3, repositorios temporales y CLI
+simulada): **20 métodos nuevos correctos** en 4,326 s; después, **103 métodos de
+planificación** en 26,273 s (incluyen esos 20) y **39 de compatibilidad** en
+10,904 s, todos con código 0, sin fallos, errores ni omisiones. El fixture verifica
+stdin antes de responder y rechaza omitir las referencias aunque estén en disco.
+Se conservan por separado la reproducción previa del argumento aún no admitido
+y un error intermedio de sintaxis en una prueba, corregido antes de estos resultados.
+Las [pruebas de referencias](../tests/test_plan_references.py) cubren selección en
+Git frente al checkout, límites, rutas y tipos rechazados, UTF-8, herencia,
+alteraciones de evidencia y compatibilidad sin referencias.
+
+La **validación integrada está superada**. El usuario ejecutó la suite en su
+terminal autorizada el 24 de octubre de 2026 con Python 3.12.3: **768 métodos,
+378,462 s de unittest y 379,212918797 s de proceso**, código 0, sin fallos, errores
+ni omisiones. El runner existente utilizó `repair_case.run_process`, entorno
+`evaluation`, límite de 600 s y canales separados. Se cotejaron los canales
+completos, las 768 identidades ordenadas, los hashes y modos de los 171 archivos,
+HEAD, rama e índice con el árbol evaluado. Este cierre reutiliza esa ejecución;
+solo README y esta guía se actualizan después, sin repetir suites locales.
+
+El primer intento integrado conserva su resultado `no_superada` en
+`runs/20261023_contexto_planificador/validacion_terminal/`: sus 25 fallos de
+booking-batch ocurrieron en `setUp/check_candidate`, antes de invocar el hijo,
+porque el modo `0664`, ya registrado en el árbol preparado, incumplía el `0644`
+contractual. La evidencia no determina qué originó ese modo. Tras registrar que
+`booking_batch.py` era regular, de 2213 bytes y SHA-256
+`7274cb76fb53df6572b03a519c46cda0107bd4399bdf579b89b74f0328792435`, se restauró
+únicamente su modo a `0644`, conservando los bytes. La aceptación enfocada superó
+25 métodos en 8,815 s de unittest, código 0, sin fallos, errores ni omisiones;
+la exigencia contractual de permisos permanece intacta.
+
+La restauración y sus comprobaciones se conservan en
+`runs/20261024_contexto_planificador_permisos/`; la ejecución integrada posterior
+está en su subdirectorio `validacion_terminal/`, con manifiesto corregido y salida
+independiente. El cotejo de cierre queda en
+`runs/20261024_contexto_planificador_cierre/`. Son registros locales excluidos de
+Git; el fallo anterior y los demás históricos permanecen intactos. No se han
+invocado modelos reales para este cambio: la utilidad semántica de las referencias
+queda pendiente de una ejecución posterior.
 
 ## Esquema cerrado de propuesta v1
 
@@ -139,7 +231,8 @@ a stdout; un fallo va a stderr. Una interrupción también termina con código 1
 
 Cada ejecución crea exclusivamente `runs/<fecha>_plan_project_<id>/`:
 
-- `materiales/`: solicitud, contexto mínimo, instrucciones y esquema.
+- `materiales/`: solicitud, contexto, instrucciones, esquema y, si se seleccionaron,
+  referencias explícitas; en continuaciones, también los datos de continuación.
 - `planificador/`: prompt de entrada, versión, consultas previas, eventos,
   stderr y respuesta original, también ante errores.
 - `procedencia.json`, `proyecto_antes.json`, `resultado.json`, tiempos y hashes.
