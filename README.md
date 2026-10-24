@@ -49,7 +49,25 @@ No inicia desarrollo, pruebas, revisión ni incorporación; un borrador sin
 preguntas tampoco es aprobación. El esquema de propuesta v1 es independiente
 de las configuraciones ejecutables del motor. La ayuda no invoca modelos.
 La guía conserva los experimentos reales y sus límites, incluida la corrección
-de entrega de materiales publicada en la PR #17. La continuación permite aportar
+de entrega de materiales publicada en la PR #17. Puedes seleccionar referencias
+de lectura del commit base, cuyos textos completos se incluyen en el mensaje:
+
+```bash
+python3 -B plan_project.py "Contrasta una propuesta de consulta con el contrato" \
+  --reference booking_core.py --reference tasks/006-booking-core.md
+```
+
+`--reference` es repetible, solo para la planificación inicial; no lee cambios
+locales ni autoriza modificar o ejecutar los documentos. Las continuaciones
+heredan exactamente las referencias archivadas. Consulta los
+[límites y validación de referencias](docs/planificacion-proyectos.md#referencias-explícitas-de-lectura).
+La validación integrada de este cambio, ejecutada por el usuario el 24 de octubre
+de 2026, superó **768 métodos en 378,462 s de unittest**, código 0, sin fallos,
+errores ni omisiones. Se cotejaron canales, identidades y árbol evaluado; este
+cierre documental reutiliza esa ejecución. La utilidad semántica de las
+referencias con un modelo real sigue pendiente.
+
+La continuación permite aportar
 respuestas explícitas sin convertir el borrador en una tarea ejecutable:
 
 ```bash

@@ -12,7 +12,8 @@ from uuid import uuid4
 
 from case_evidence import digest, read_regular, require
 from project_plan import (MAX_REQUEST, base_context, plan_state, render_proposal,
-                          response_schema, validate_response)
+                          response_schema, validate_response, read_references, reference_path,
+                          reference_paths, validate_reference_material, REFERENCE_FIELDS)
 from project_plan_continuation import (CONTROLLER_SOURCES, MAX_ANSWERS, MAX_MESSAGE, continuation_data,
                                       assumptions, encoded, export_template, load_parent, model_data,
                                       questions, regular_bytes)
@@ -76,7 +77,7 @@ def process_failure(agent):
 
 
 def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, decisions=None,
-             model=None, reasoning_effort=None):
+             model=None, reasoning_effort=None, references=None):
     started = time.monotonic()
     root = Path(project_root).resolve()
     log = None
@@ -96,6 +97,8 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, dec
                 (log / name).unlink(missing_ok=True)
 
     try:
+        selected = reference_paths(references) if references is not None else []
+        require(not selected or from_plan is None, "--reference solo se admite en una planificación inicial")
         options = codex_model_options(model=model, reasoning_effort=reasoning_effort)
         if options:
             result["opciones_solicitadas"] = {"model": model, "reasoning_effort": reasoning_effort}
@@ -129,7 +132,15 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, dec
         save()
         before = tree_state(root, filter_local=True)
         controller_commit = git(root, "rev-parse", "HEAD^{commit}").decode().strip()
-        context = json.loads(parent.materials["contexto.json"]) if parent else base_context(root)
+        context = json.loads(parent.materials["contexto.json"]) if parent else base_context(root, base=controller_commit)
+        references_raw = parent.materials.get("referencias.json") if parent else None
+        if selected:
+            documents = read_references(root, context["commit_base"], selected)
+            references_raw = encoded(documents)
+            context["referencias"] = [{key: item[key] for key in REFERENCE_FIELDS} for item in documents["archivos"]]
+            context["restricciones"] = dict(context["restricciones"], contexto=
+                "Inventario y referencias explícitas del commit base; sin cambios pendientes del workspace.")
+        validate_reference_material(references_raw, context)
         result["commit_base"] = context["commit_base"]
         result["commit_controlador"] = controller_commit
         instructions = read_regular(PROMPT)
@@ -140,6 +151,8 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, dec
             "respuesta.schema.json": (json.dumps(response_schema(), ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
             "instrucciones.md": instructions,
         }
+        if references_raw is not None:
+            materials["referencias.json"] = references_raw
         if parent:
             # Mantener incluso la representación exacta del contexto histórico.
             for name in ("solicitud.txt", "contexto.json"):
@@ -169,7 +182,9 @@ def run_plan(request, project_root=PROJECT, *, from_plan=None, answers=None, dec
                 name: digest(read_regular(PROJECT / name)) for name in CONTROLLER_SOURCES}},
             "continuacion": continuation if parent else None,
             **({"opciones_solicitadas": result["opciones_solicitadas"]} if options else {}),
-            "nota": "Inventario mínimo de Git, sin fuentes. Directorios y hashes no son un sandbox.",
+            "nota": ("Inventario y referencias explícitas archivadas; no autorizan ejecución ni cambios. "
+                     "Directorios y hashes no son un sandbox." if references_raw is not None else
+                     "Inventario mínimo de Git, sin fuentes. Directorios y hashes no son un sandbox."),
         })
         temp_root = Path(tempfile.gettempdir()).resolve()
         require(temp_root != root and root not in temp_root.parents,
@@ -280,6 +295,8 @@ def main(arguments=None, *, project_root=PROJECT):
         allow_abbrev=False)
     parser.add_argument("solicitud", nargs="?", type=request_text, help="Descripción del trabajo; una única sesión de planificación")
     parser.add_argument("--from-plan", metavar="REGISTRO", help="Registro validado que se continuará")
+    parser.add_argument("--reference", metavar="RUTA", action="append", type=reference_path,
+                        help="Referencia de lectura del commit base; repetible, solo al iniciar")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--answers-template", metavar="ARCHIVO", help="Exportar plantilla sin invocar modelos ni sobrescribir")
     mode.add_argument("--decisions-template", metavar="ARCHIVO", help="Exportar plantilla de decisiones sobre supuestos")
@@ -292,6 +309,8 @@ def main(arguments=None, *, project_root=PROJECT):
     if args.answers_template == "" or args.decisions_template == "":
         parser.error("La ruta de la plantilla no puede estar vacía")
     exporting = args.answers_template or args.decisions_template
+    if args.reference is not None and (args.from_plan is not None or exporting):
+        parser.error("--reference excluye --from-plan y las exportaciones de plantillas")
     continuing = args.answers or args.decisions
     if exporting and continuing:
         parser.error("Exportar una plantilla excluye --answers y --decisions")
@@ -312,7 +331,7 @@ def main(arguments=None, *, project_root=PROJECT):
         print("Sin invocación ni reserva; pendiente de completar por el usuario.")
         return 0
     result = run_plan(args.solicitud, project_root, from_plan=args.from_plan, answers=args.answers, decisions=args.decisions,
-                      model=args.model, reasoning_effort=args.reasoning_effort)
+                      model=args.model, reasoning_effort=args.reasoning_effort, references=args.reference)
     stream = sys.stderr if result["codigo_salida"] else sys.stdout
     print("Estado:", result["estado"], file=stream)
     if result["registro"]:

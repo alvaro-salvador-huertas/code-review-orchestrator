@@ -9,7 +9,8 @@ import stat
 
 from case_evidence import digest, parse_json, require
 from project_plan import (MAX_REQUEST, PYTHON_FILE, plan_state, render_proposal,
-                          response_schema, validate_response)
+                          response_schema, validate_response, validate_reference_metadata,
+                          validate_reference_material)
 from project_task_config import fields, relative_path
 
 
@@ -57,7 +58,8 @@ def utf8(value, limit, label, *, nonblank=False):
 
 
 def context_valid(context):
-    fields(context, ("commit_base", "inventario_python", "restricciones"), "contexto")
+    fields(context, {"commit_base", "inventario_python", "restricciones"} |
+           ({"referencias"} if type(context) is dict and "referencias" in context else set()), "contexto")
     require(type(context["commit_base"]) is str and
             re.fullmatch(r"[0-9a-f]{40}", context["commit_base"]), "Commit base inválido")
     inventory = context["inventario_python"]
@@ -70,6 +72,8 @@ def context_valid(context):
                 "Entrada de inventario inválida")
         names.append(item["ruta"])
     require(len(names) == len(set(names)), "Inventario duplicado")
+    if "referencias" in context:
+        validate_reference_metadata(context["referencias"], context["commit_base"])
     restrictions = context["restricciones"]
     fields(restrictions, ("archivos", "dependencias", "infraestructura_protegida", "ejecucion",
                           "autorizacion", "contexto"), "restricciones")
@@ -262,12 +266,13 @@ def load_parent(path):
         fields(proposal, keys | ({"continuacion"} if proposal["version"] >= 2 else set()), "propuesta archivada")
         materials = {name.removeprefix("materiales/"): raw for name, raw in blobs.items()
                      if name.startswith("materiales/")}
-        require(set(materials) == set(MATERIALS) | ({"continuacion.json"} if proposal["version"] >= 2 else set()),
-                "Materiales inesperados")
         request = materials["solicitud.txt"].decode("utf-8")
         utf8(request, MAX_REQUEST, "solicitud original", nonblank=True)
         context = parse_json(materials["contexto.json"])
         context_valid(context)
+        require(set(materials) == set(MATERIALS) | ({"continuacion.json"} if proposal["version"] >= 2 else set())
+                | ({"referencias.json"} if "referencias" in context else set()), "Materiales inesperados")
+        validate_reference_material(materials.get("referencias.json"), context)
         require(parse_json(materials["respuesta.schema.json"]) == response_schema(), "Esquema de origen distinto")
         raw = blobs["planificador/respuesta_original.txt"]
         plan = validate_response(raw, context)
@@ -287,7 +292,9 @@ def load_parent(path):
                     "modo": stat.S_IMODE((path / "materiales" / name).lstat().st_mode)}, "Identidad de material alterada")
         prompt = blobs["planificador/entrada.txt"]
         legacy = materials["instrucciones.md"] + b"\nLee solicitud.txt y contexto.json. Devuelve solo el JSON del esquema.\n"
-        if proposal["version"] != 1 or prompt != legacy:
+        if "referencias" in context:
+            require(len(prompt) <= MAX_MESSAGE, "Mensaje de referencias supera 4 MiB")
+        if proposal["version"] != 1 or prompt != legacy or "referencias" in context:
             require(parse_json(prompt) == {"instrucciones": materials["instrucciones.md"].decode("utf-8"),
                     "materiales": {n: b.decode("utf-8") for n, b in materials.items() if n != "instrucciones.md"}},
                     "Entrada no corresponde a materiales")
@@ -322,6 +329,8 @@ def load_parent(path):
                         for sha in controller["fuentes_sha256"].values()), "Identidad del controlador inválida")
             require(all(materials[n] == parent.materials[n] for n in ("solicitud.txt", "contexto.json")),
                     "Solicitud o contexto original alterados")
+            require(materials.get("referencias.json") == parent.materials.get("referencias.json"),
+                    "Referencias originales alteradas")
             require(parse_json(materials["continuacion.json"]) == model_data(parent, expected),
                     "Materiales de continuación incoherentes")
             depth, answers, carried = expected["profundidad"], expected["respuestas_confirmadas"], expected["pendientes_anteriores"]

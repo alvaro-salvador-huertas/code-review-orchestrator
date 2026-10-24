@@ -93,10 +93,11 @@ class PlanningTests(unittest.TestCase):
                                   capture_output=True, check=True, timeout=10).stdout
 
     def configure(self, *, plan=None, raw=None, mode="normal", code=0,
-                  model=None, reasoning_effort=None, cli_help=HELP):
+                  model=None, reasoning_effort=None, cli_help=HELP, references=None):
         self.settings.write_text(json.dumps({"raw": json.dumps(concrete() if plan is None else plan)
                                             if raw is None else raw, "mode": mode, "code": code,
-                                            "model": model, "reasoning_effort": reasoning_effort}))
+                                            "model": model, "reasoning_effort": reasoning_effort,
+                                            "references": references}))
         self.fake.write_text(f'''#!{sys.executable}
 import json, os, sys, time
 from pathlib import Path
@@ -150,11 +151,18 @@ assert message["instrucciones"].encode("utf-8") == (log/"materiales/instruccione
 names = {{"solicitud.txt", "contexto.json", "respuesta.schema.json"}}
 if (log/"materiales/continuacion.json").exists():
     names.add("continuacion.json")
+if options["references"] is not None:
+    names.add("referencias.json")
 assert set(message["materiales"]) == names
 for name, text in message["materiales"].items():
     assert text.encode("utf-8") == (log/"materiales"/name).read_bytes()
     assert text.encode("utf-8") == Path(name).read_bytes()
 assert Path(args[args.index("--output-schema") + 1]).read_bytes() == message["materiales"]["respuesta.schema.json"].encode("utf-8")
+if options["references"] is not None:
+    assert json.loads(message["materiales"]["referencias.json"]) == {{"version": 1, "archivos": options["references"]}}
+    context = json.loads(message["materiales"]["contexto.json"])
+    assert context["referencias"] == [{{k: v for k, v in item.items() if k != "contenido"}}
+                                     for item in options["references"]]
 if "continuacion.json" in names:
     data = json.loads(message["materiales"]["continuacion.json"])
     provenance = json.loads((log/"procedencia.json").read_text())["continuacion"]
@@ -172,7 +180,7 @@ if "continuacion.json" in names:
     assert data["propuesta_anterior_del_modelo"] == proposal["propuesta"]
     assert data["respuestas_explicitas_del_usuario"] == provenance["respuestas_confirmadas"]
     assert data["preguntas_sin_responder"] == provenance["pendientes_anteriores"]
-    for name in ("solicitud.txt", "contexto.json"):
+    for name in ("solicitud.txt", "contexto.json", *(["referencias.json"] if options["references"] is not None else [])):
         assert message["materiales"][name].encode("utf-8") == (parent/"materiales"/name).read_bytes()
 print('{{"type":"turn.completed","simulado":true}}', flush=True)
 print("Diagnóstico de la CLI simulada", file=sys.stderr, flush=True)
