@@ -452,7 +452,7 @@ acreditó una corrección automática tras pruebas fallidas y se detuvo por time
 del revisor, código 4, sin dictamen final ni incorporación.
 
 También se puede solicitar una [revisión aislada de un intento
-terminado](docs/orquestacion-proyectos.md#revisión-aislada-de-una-entrega-terminada)
+terminado](orquestacion-proyectos.md#revisión-aislada-de-una-entrega-terminada)
 con `review_project.py --orchestration-run ... --attempt 2 --operation-id ...`.
 Usa registro propio y una única reserva del revisor; no repite desarrollos ni
 evaluaciones, no reanuda el origen y no incorpora entregas. `--review-timeout`
