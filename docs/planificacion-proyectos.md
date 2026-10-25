@@ -120,6 +120,14 @@ Git; el fallo anterior y los demás históricos permanecen intactos. No se han
 invocado modelos reales para este cambio: la utilidad semántica de las referencias
 queda pendiente de una ejecución posterior.
 
+El estado pendiente anterior corresponde al cierre del 24 de octubre. El
+25 de octubre se contrastó una [demostración real con referencias](cierre-v1.md#demostración-real-de-planificación-con-referencias):
+el borrador reconoce `booking_batch.py` como existente y propone una extracción
+privada limitada, conservando JSON estricto, delegación y ausencia de salida
+parcial. Es una observación de planificación; no implementa el refactor ni
+autoriza su desarrollo. El contraste se hizo por lectura de la evidencia,
+sin repetir la llamada ni modificar los registros originales.
+
 ## Esquema cerrado de propuesta v1
 
 El esquema se define en [project_plan.py](../project_plan.py), mediante
