@@ -10,9 +10,9 @@ planificador de borradores y herramientas para consultar registros. Trabaja con
 copias y conserva candidatos, informes y fallos. La incorporación al producto
 requiere autorización humana; superar el flujo no aplica el cambio automáticamente.
 
-El [cierre de la v1](docs/cierre-v1.md) fija el alcance y sus límites. Las
-[notas para v1.0.0](docs/notas-v1.0.0.md) están preparadas; todavía no se ha creado
-el tag ni la release.
+El [cierre de la v1](docs/cierre-v1.md) fija el alcance y sus límites. La
+v1.0.0 está publicada; sus [notas](docs/notas-v1.0.0.md) y registros se conservan.
+El primer alcance de v1.1 añade preparación local de tareas desde planes archivados.
 
 ## Demo sin modelo
 
@@ -37,6 +37,24 @@ código de los candidatos. Puedes cambiar el último componente de la ruta:
 recuentos. Permiten explorar el inspector; no acreditan ejecuciones de agentes
 ni pruebas reales. La [guía de la demo](examples/inspect_run/README.md) explica
 los canales y la diferencia entre el código de consulta y el de ejecución.
+
+## Preparar una tarea desde un plan, sin modelo
+
+```bash
+python3 -B prepare_project.py --from-plan /ruta/al/registro --output /ruta/a/padre/paquete-nuevo
+```
+
+El padre debe existir y el destino ser nuevo. Un plan completo genera
+`contrato.borrador.md`, `configuracion.borrador.json` y `revision.md` (código 0).
+Con preguntas, supuestos acumulados o viabilidad insuficiente produce solo
+`revision.md` (3). Origen inválido o fallo de exportación devuelve 1; argumentos
+incorrectos, incluidas rutas vacías, devuelven 2.
+
+Son borradores no ejecutables. No consulta Git ni modelos, ejecuta pruebas o
+consume reservas. Conserva la base y la cadena históricas, rechaza destinos
+existentes y mantiene la precondición de aceptación inicialmente fallida del
+motor. La [guía de preparación](docs/preparacion-tareas.md) precisa destinos,
+interrupciones, límites y una demostración sintética reproducible de ambos resultados.
 
 ## Roles y decisiones
 
@@ -83,6 +101,7 @@ esfuerzo expresan valores solicitados, no prueban qué modelo se sirvió.
 | --- | --- |
 | Consultar con `inspect_run.py` o `inspect_project.py`; exportar JSON de consulta a CSV. | No. |
 | Pedir ayuda o exportar plantillas de respuestas/decisiones del planificador. | No. |
+| Preparar borradores con `prepare_project.py`. | No; tampoco ejecuta pruebas ni consulta Git. |
 | Evaluar un caso con `run_case.py`. | No; sí ejecuta pruebas en copias. |
 | Crear un plan o continuarlo con `--answers` o `--decisions`. | Sí. |
 | Lanzar desarrollo, revisión u orquestación de casos o proyectos. | Sí, al alcanzar la etapa correspondiente. |
@@ -102,6 +121,7 @@ comprobada con todos los sistemas. Consulta la
 | [Tareas de producto](docs/cierre-v1.md#recorridos-de-producto) | CSV, reservas, núcleo y lotes con incorporaciones autorizadas; también recorridos detenidos y correcciones asistidas, conservados como tales. |
 | [Planificación con referencias, 25/10/2026](docs/cierre-v1.md#demostración-real-de-planificación-con-referencias) | Un borrador identifica código existente y propone una extracción limitada. No implementa ni aprueba el refactor. |
 | [Validación integrada y CI existentes](docs/cierre-v1.md#validación-reutilizada) | 768 métodos correctos; agentes simulados en las pruebas del controlador, procesos de evaluación reales. |
+| [Preparación local v1.1: integrada desde la terminal del usuario](docs/preparacion-tareas.md#integrada-aportada-desde-la-terminal) | 791 métodos en 296,344 s de unittest, código 0; identidades, canales y árbol conservado cotejados. Enfocadas, compatibilidad y demos documentadas por separado. |
 | [Demo del inspector](examples/inspect_run/README.md) | Registros estáticos sintéticos; sus cifras no se suman a las pruebas ejecutadas. |
 
 Los ejemplos sintéticos y las pruebas del controlador permiten comprobar
@@ -133,6 +153,7 @@ los procesos de evaluación. Las ampliaciones futuras quedan fuera de este cierr
 Empieza por la demo sin modelo. Para otras operaciones, utiliza la guía de su vía:
 
 - [Planificación, referencias y continuaciones](docs/planificacion-proyectos.md).
+- [Preparación local de tareas desde planes](docs/preparacion-tareas.md).
 - [Evaluación, reparación, revisión y orquestación del benchmark](docs/funcionamiento.md).
 - [Orquestación de proyectos](docs/orquestacion-proyectos.md) y [preparación de tareas](docs/tareas-configurables.md).
 - [Inspector de proyectos y exportación](docs/inspector-proyectos.md).
