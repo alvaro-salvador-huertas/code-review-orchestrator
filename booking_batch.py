@@ -22,6 +22,18 @@ def _reject_constant(value):
     raise ValueError(f"constante no permitida en JSON: {value}")
 
 
+def _read_batch(path):
+    with open(path, "r", encoding="utf-8", errors="strict") as source:
+        documents = json.load(
+            source,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    if not isinstance(documents, list):
+        raise ValueError("la raiz JSON debe ser una lista")
+    return documents
+
+
 def _main():
     arguments = sys.argv[1:]
     if arguments in (["-h"], ["--help"]):
@@ -45,14 +57,7 @@ def _main():
         return 2
 
     try:
-        with open(path, "r", encoding="utf-8", errors="strict") as source:
-            documents = json.load(
-                source,
-                object_pairs_hook=_unique_object,
-                parse_constant=_reject_constant,
-            )
-        if not isinstance(documents, list):
-            raise ValueError("la raiz JSON debe ser una lista")
+        documents = _read_batch(path)
     except (OSError, ValueError, RecursionError) as exc:
         print(f"{path!a}: {exc}", file=sys.stderr)
         return 1
