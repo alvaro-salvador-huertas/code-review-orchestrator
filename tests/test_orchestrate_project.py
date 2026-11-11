@@ -63,6 +63,8 @@ class ProjectFlowTests(unittest.TestCase):
         for name in (*project_flow.SUPPORT, "orchestrate_project.py", "project_flow.py", "project_flow_runner.py",
                      "review_case.py", "review_project.py", project_flow.DEVELOPER_PROMPT, project_flow.REVIEW_PROMPT):
             self.write(name, (ROOT / name).read_text())
+        from evaluator_stub import install
+        install(self)
         for kind in ("hallazgos", "anidamiento"):
             self.write(project_flow.SUITES[kind], PUBLIC)
         patch.object(review_case, "CODEX_EXECUTABLE", str(self.fake)).start()

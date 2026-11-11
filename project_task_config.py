@@ -13,7 +13,7 @@ from process_environment import process_environment
 TYPE = "orquestacion_configurable_v1"
 MULTIPLE = "orquestacion_configurable_v2"
 # Infraestructura que la selección de confianza nunca puede hacer editable.
-PROTECTED = {"orchestrate_project.py", "project_flow.py", "project_flow_runner.py",
+PROTECTED = {"orchestrate_project.py", "project_flow.py", "project_flow_runner.py", "python_evaluator.py",
              "project_task_config.py", "project_delivery.py", "project_test_inventory.py",
              "repair_project.py", "review_project.py", "review_case.py", "repair_case.py",
              "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py",

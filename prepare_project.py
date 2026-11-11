@@ -19,7 +19,7 @@ SOURCES = ("prepare_project.py", "project_plan_continuation.py", "project_plan.p
 AUTHORITIES = {"tasks", "evals", "prompts"}
 # Utilidades reservadas por la congelación de materiales del motor.
 RESERVED_MATERIALS = {"repair_case.py", "run_case.py", "case_config.py",
-                      "case_evidence.py", "process_environment.py", "project_test_inventory.py"}
+                      "case_evidence.py", "process_environment.py", "project_test_inventory.py", "python_evaluator.py"}
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
