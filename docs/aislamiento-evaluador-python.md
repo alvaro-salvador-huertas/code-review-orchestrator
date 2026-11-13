@@ -294,8 +294,9 @@ se edita el HOME personal ni la configuración del sistema.
 ### Resultados reales de la versión corregida
 
 El 13 de noviembre de 2026, en Ubuntu 24.04.5 con **Podman rootless 4.9.3 y
-cgroups v2**, se ejecutaron desde el nuevo worktree, como usuario habitual y
-fuera del sandbox de la sesión, los siguientes comandos:
+cgroups v2**, se ejecutaron desde el nuevo worktree limpio del commit de corrección
+`bb1204164b0758ec04e793cfb1f08484da9af9dc`, como usuario habitual y fuera del
+sandbox de la sesión, los siguientes comandos:
 
 ```sh
 python3 -B python_evaluator.py check
@@ -305,7 +306,7 @@ CRO_REAL_PODMAN=1 python3 -B -m unittest discover -s tests -p test_python_isolat
 `check` terminó con código 0, estado `finalizada`, sin error y con limpieza
 confirmada. La imagen fijada ya estaba disponible en el almacén rootless; no
 fue necesario ejecutar `prepare` ni descargarla de nuevo. Las **cinco
-integraciones reales pasaron en 20.145 s**, sin fallos, errores ni omisiones:
+integraciones reales pasaron en 20.810 s**, sin fallos, errores ni omisiones:
 
 | Integración real corregida | Resultado |
 | --- | --- |
@@ -319,6 +320,30 @@ Las 16 pruebas unitarias específicas también pasaron. Estas usan sustituciones
 explícitas para probar los fallos y la sonda; se distinguen de las cinco
 integraciones anteriores, que arrancaron contenedores reales. No se desactivaron
 protecciones del sistema ni se relajaron los controles para obtener estos resultados.
+
+### Suite ordinaria y comprobaciones del commit corregido
+
+Desde el mismo worktree limpio en `bb1204164b0758ec04e793cfb1f08484da9af9dc`:
+
+```sh
+env -u CRO_REAL_PODMAN python3 -B -m unittest discover -s tests -v
+git diff --check
+git status --porcelain
+```
+
+La suite terminó en **290.566 s** con **822 pruebas descubiertas: 817 correctas
+y 5 integraciones opt-in omitidas**, sin fallos ni errores. Incluye las **16
+unitarias específicas** del evaluador y las **10 pruebas de la PR #26**, ahora
+versionadas por main. Las cinco omisiones corresponden a las integraciones que
+pasaron por separado con Podman real; no se cuentan como ejecución real en la
+suite ordinaria.
+
+El worktree estaba limpio antes y después de las pruebas. `git diff --check`
+no encontró errores. Los archivos locales del checkout original conservaron su
+contenido, modo y fecha de modificación, y ese checkout siguió en `a720590`.
+El commit posterior de cierre añade únicamente estos resultados a la
+documentación; no cambia los fuentes ni las pruebas verificadas. La rama queda
+local, sin publicación ni apertura de PR.
 
 ### Límite de disco pendiente
 
