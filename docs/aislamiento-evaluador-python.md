@@ -101,7 +101,7 @@ procedencia no acreditan aislamiento y no se convierten retroactivamente.
 `lista_para_revision_humana` sigue siendo una propuesta: no hay incorporación
 automática y la aprobación humana continúa siendo necesaria.
 
-## Pruebas y resultado de esta sesión
+## Pruebas y evidencia de validación
 
 ```sh
 python3 -B -m unittest discover -s tests -v
@@ -127,44 +127,129 @@ hijo y comprobación de ausencia del contenedor y del proceso; inventario con
 importación que intentaría escribir fuera de los montajes. Cuando se habilitan,
 un runtime roto produce **fallos**, no skips silenciosos.
 
-En esta sesión, Ubuntu 24.04.5 no tenía Podman ni uidmap instalados. `sudo -n`
-exige contraseña. Se descargaron paquetes oficiales en `/tmp`, sin instalación
-global, y se ejecutó Podman 4.9.3 fuera del sandbox de la sesión. Falló ya en
-`podman info`, antes de descargar/preparar la imagen y antes del arranque:
+### Antecedente: sesión inicial del 11 de noviembre de 2026
+
+En la sesión inicial, Ubuntu 24.04.5 no tenía Podman ni uidmap instalados.
+`sudo -n` exigía contraseña. Se descargaron paquetes oficiales en `/tmp`, sin
+instalación global, y se ejecutó Podman 4.9.3 fuera del sandbox de la sesión.
+Falló ya en `podman info`, antes de descargar/preparar la imagen y del arranque:
 
 ```text
 newuidmap: write to uid_map failed: Operation not permitted
 Error: cannot set up namespace using ".../newuidmap": exit status 1
 ```
 
-Los helpers extraídos pertenecen al usuario y no equivalen a los helpers
+Los helpers extraídos pertenecían al usuario y no equivalían a los helpers
 privilegiados instalados por Ubuntu. Aunque el sysctl
-`kernel.apparmor_restrict_unprivileged_userns` vale 1, este diagnóstico por sí
+`kernel.apparmor_restrict_unprivileged_userns` valía 1, este diagnóstico por sí
 solo **no demuestra** que AppArmor sea la causa. No se modificaron sysctls ni
-perfiles. Las cuatro integraciones reales se intentaron y quedaron bloqueadas
-por ese fallo: no se afirma que hayan pasado el candidato válido, el señuelo,
-la red ni la limpieza tras timeout. La negativa a ejecutar sin runtime sí se
-verificó, además de sus pruebas simuladas. Deben repetirse en un anfitrión con
-Podman instalado y una sesión rootless funcional antes de aprobar la PR.
+perfiles. En aquel intento, las cuatro integraciones reales quedaron bloqueadas
+por ese fallo; no acreditaban el candidato válido, el señuelo, la red ni la
+limpieza tras timeout. La negativa a ejecutar sin runtime sí se verificó, además
+de sus pruebas simuladas. Este fallo queda como antecedente del entorno inicial;
+la validación posterior desde la terminal normal sí pasó, como se detalla abajo.
 
 La suite se ejecutó fuera del sandbox de la sesión porque este bloqueaba los
 sockets de loopback de pruebas HTTP existentes. También se encontró
 `booking_batch.py` con permisos locales 0664; se normalizó a 0644, como exige
 su aceptación, sin cambiar el contenido ni el modo Git 100644.
 
-La pasada definitiva se ejecutó en una copia estable bajo `/tmp`: **817 pruebas,
+La pasada anterior se ejecutó en una copia estable bajo `/tmp`: **817 pruebas,
 813 correctas y 4 integraciones opt-in omitidas; cero fallos**, en 299 segundos
-aproximadamente. Incluye las 12 pruebas unitarias nuevas y pruebas locales
-preexistentes ajenas a este commit. Los 185 archivos versionados de trabajo se
+aproximadamente. Incluía las 12 pruebas unitarias nuevas y 10 pruebas locales
+preexistentes ajenas al commit. Por tanto, sus 813 pruebas correctas **no son el
+recuento atribuible a la rama**. Los 185 archivos versionados de trabajo se
 compararon byte a byte con la copia, sin diferencias. Una pasada concurrente
 sobre el checkout había dado tres fallos de conservación por variaciones de
-metadatos mientras se realizaban otras operaciones; la copia estable conserva
+metadatos mientras se realizaban otras operaciones; la copia estable conservaba
 las mismas comprobaciones sin esa interferencia.
 
-Las cuatro integraciones reales habilitadas explícitamente se intentaron
-también con la configuración definitiva y fallaron en el preflight rootless
-descrito arriba. `prepare` y `check` con el runtime ausente devolvieron código 1
-y diagnóstico explícito. `git diff --check` no encontró errores.
+En aquella sesión, las cuatro integraciones reales habilitadas explícitamente
+fallaron en el preflight rootless descrito arriba. `prepare` y `check` con el
+runtime ausente devolvieron código 1 y diagnóstico explícito.
+
+### Integración real verificada desde la terminal normal
+
+El 13 de noviembre de 2026 se confirmó en **Ubuntu 24.04.5 con Podman rootless
+4.9.3**, desde una terminal normal, el siguiente resultado sobre un worktree
+limpio del commit de implementación
+`18d70b48366b81c0853bc183d962e0bbd601fa57`:
+
+```sh
+python3 -B python_evaluator.py prepare
+python3 -B python_evaluator.py check
+CRO_REAL_PODMAN=1 python3 -B -m unittest discover -s tests -p test_python_isolation_real.py -v
+```
+
+`prepare` y `check` terminaron correctamente. Las **cuatro integraciones reales
+pasaron en 18.049 s**, sin omisiones. Este es el resultado verificado desde la
+terminal normal aportado para esta revisión; se distingue del intento previo
+en el entorno de la sesión.
+
+| Integración real | Resultado |
+| --- | --- |
+| Candidato válido: orquestación completa e informe para revisión humana | Correcto |
+| Señuelo fuera de montajes y conexión a destino loopback controlado | Inaccesible / bloqueada |
+| Timeout: diagnóstico, sin contenedor ni proceso descendiente activo | Correcto |
+| Inventario: importación sin escribir el marcador en el anfitrión | Correcto |
+
+El fallo previo de `newuidmap` no describe el resultado de esta ejecución
+posterior: el runtime instalado y ejecutado desde la terminal normal sí permitió
+aplicar los controles del commit. La suite ordinaria mantiene las sustituciones
+explícitas de sus fixtures y debe distinguirse de esta integración real.
+
+### Suite ordinaria atribuible a la rama
+
+El 13 de noviembre de 2026 se ejecutó la suite ordinaria desde un **worktree
+limpio del commit `18d70b48366b81c0853bc183d962e0bbd601fa57`**, creado con
+`umask 022` para respetar los modos 0644 exigidos por las pruebas existentes:
+
+```sh
+umask 022
+git worktree add --detach /tmp/python-evaluator-pr-review-20261113 18d70b48366b81c0853bc183d962e0bbd601fa57
+cd /tmp/python-evaluator-pr-review-20261113
+env -u CRO_REAL_PODMAN python3 -B -m unittest discover -s tests -v
+git status --porcelain
+```
+
+Resultado: **807 pruebas descubiertas, 803 correctas y 4 integraciones reales
+opt-in omitidas; cero fallos y cero errores**, en **299.865 s**. Se incluyen las
+12 pruebas unitarias específicas del aislamiento. El worktree estaba limpio
+antes y después de la ejecución; no contenía los cuatro archivos locales sin
+seguimiento. La suite se ejecutó fuera del sandbox de la sesión para permitir
+los sockets de loopback de sus pruebas HTTP.
+
+Este es el recuento atribuible a la rama: las 10 pruebas locales ajenas que
+inflaban la pasada anterior de 813 pruebas correctas están excluidas. Las
+cuatro omisiones de esta suite ordinaria corresponden a las integraciones
+opt-in; su ejecución real satisfactoria en 18.049 s se registra por separado
+arriba. Esta actualización posterior al commit probado cambia únicamente la
+documentación, sin modificar la implementación ni las pruebas.
+
+### Revisión del diff contra `main`
+
+Se revisaron las llamadas desde `orchestrate_project.py`, la frontera de
+`python_evaluator.py`, su política de entorno y las pruebas del diff respecto
+a `main`. No se detectaron hallazgos bloqueantes dentro del alcance de esta PR:
+
+- `inventory_base()` y `evaluate_flow()` invocan `run_isolated()`. Tanto el
+  descubrimiento que importa módulos como los procesos de las pruebas quedan
+  dentro de Podman; la lectura de Git y el análisis estático no importan código
+  del proyecto.
+- El preflight y la sonda preceden a la ejecución del proyecto. Los errores del
+  runtime o de los controles detienen el flujo; las pruebas de fallo comprueban
+  que no aparece el marcador de ejecución en el anfitrión. No hay alternativa de
+  ejecución local en producción.
+- Los montajes de entrada son de solo lectura y la única salida de escritura es
+  temporal. La recogida valida los nombres permitidos y rechaza enlaces y
+  archivos especiales; stdout, stderr y los registros del controlador quedan
+  fuera de ese montaje.
+- La limpieza usa el nombre único de la ejecución, fuerza su retirada y verifica
+  su ausencia. La recogida normal de resultados sucede después de esa limpieza;
+  los fallos e interrupciones conservan la vía de limpieza y el diagnóstico.
+- Se conservan los criterios, los sellos de integridad y la aprobación humana.
+  Las sustituciones del runtime están limitadas a los fixtures de la suite
+  ordinaria; las cuatro integraciones habilitadas usan el contenedor real.
 
 ## Fuera de esta primera PR
 
