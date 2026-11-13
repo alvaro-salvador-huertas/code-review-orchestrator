@@ -117,6 +117,64 @@ except OSError:
             self.assertTrue(json.loads(report)['completo'])
             self.assertTrue(result['aislamiento']['limpieza_confirmada'])
 
+            # Un candidato que use el nombre del informe como directorio debe
+            # fallar sin copiar el árbol ni interrumpir el guardado del proceso.
+            bad_log = root/'bad-log'
+            code = f'''from pathlib import Path
+root = Path({str(bad_log)!r})
+(root/'consultas').mkdir()
+(root/'consultas/datos').write_text('SINTETICO')
+(root/'pruebas.json').mkdir()
+(root/'pruebas.json/no-es-informe').write_text('SINTETICO')
+'''
+            rejected = sandbox.run_isolated([sandbox.PYTHON, '-B', '-c', code], project, bad_log, 15,
+                materials=(), runner=run_process, output_limits=limits)
+            self.assertEqual(rejected['estado'], 'error_inicio', rejected)
+            self.assertIn('pruebas.json debe ser un archivo regular', rejected['error'])
+            self.assertIn('errores_recogida', rejected)
+            self.assertEqual(json.loads((bad_log/'resultado.json').read_text()), rejected)
+            self.assertFalse((bad_log/'pruebas.json').exists())
+            self.assertFalse((bad_log/'consultas').exists())
+            self.assertTrue(rejected['aislamiento']['limpieza_confirmada'])
+            for channel in ('stdout','stderr'):
+                self.assertLessEqual((bad_log/(channel+'.txt')).stat().st_size, limits[channel])
+            with self.assertRaises(StopProject):
+                sandbox.check_isolated_process(rejected)
+            name = rejected['aislamiento']['contenedor']
+            self.assertEqual(sandbox.runtime_call(['container','exists',name]).returncode, 1)
+            self.assertEqual(sandbox.runtime_call(['volume','exists',name+'-results']).returncode, 1)
+
+            # Volumen real creado por Podman; solo se inyectan los fallos de
+            # montaje/desmontaje. La retirada y su verificación siguen siendo reales.
+            original_call = sandbox.runtime_call
+            calls = []
+            def partial_preparation(args, **kwargs):
+                calls.append(args)
+                if args[:4] == ['unshare','podman','volume','mount']:
+                    return subprocess.CompletedProcess(args, 125, '', 'MONTAJE_INYECTADO_ORIGINAL')
+                if args[:4] == ['unshare','podman','volume','unmount']:
+                    return subprocess.CompletedProcess(args, 125, '', 'DESMONTAJE_INYECTADO_SECUNDARIO')
+                return original_call(args, **kwargs)
+            marker = root/'CANDIDATO_NO_INVOCADO'
+            with patch.object(sandbox, 'runtime_call', side_effect=partial_preparation):
+                failed = sandbox.run_isolated([sandbox.PYTHON, '-B', '-c',
+                    f'from pathlib import Path; Path({str(marker)!r}).touch()'],
+                    project, root/'partial-preparation', 15, materials=(), runner=run_process,
+                    output_limits=limits)
+            self.assertEqual(failed['estado'], 'error_inicio', failed)
+            self.assertIn('MONTAJE_INYECTADO_ORIGINAL', failed['error'])
+            self.assertNotIn('DESMONTAJE', failed['error'])
+            self.assertIn('DESMONTAJE_INYECTADO_SECUNDARIO', str(failed['errores_limpieza']))
+            self.assertEqual(failed['aislamiento']['limpieza_volumen']['estado_inicial'], 'presente')
+            self.assertEqual(failed['aislamiento']['limpieza_volumen']['estado_final'], 'ausente')
+            self.assertTrue(failed['aislamiento']['limpieza_confirmada'])
+            self.assertFalse(marker.exists())
+            self.assertTrue(all('--force' not in args for args in calls))
+            self.assertEqual(json.loads((root/'partial-preparation/resultado.json').read_text()), failed)
+            volume = failed['aislamiento']['volumen_resultados']
+            self.assertIn(['volume','rm',volume], calls)
+            self.assertEqual(original_call(['volume','exists',volume]).returncode, 1)
+
     def test_1_candidato_valido_completa_orquestacion(self):
         from test_orchestrate_project import ProjectFlowTests
         fixture = ProjectFlowTests()

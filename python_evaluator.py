@@ -154,11 +154,51 @@ def collect_result_volume(path, log, limits):
 
 
 def cleanup_result_volume(name):
-    volume_call(['unshare', 'podman', 'volume', 'unmount', name])
-    volume_call(['volume', 'rm', name])
-    exists = runtime_call(['volume', 'exists', name])
-    if exists.returncode != 1:
-        raise RuntimeError('No se pudo confirmar la limpieza del volumen ' + name)
+    """Intentar todas las operaciones por nombre, sin forzar contenedores.
+
+    Los fallos de comandos y la ausencia del recurso son hechos distintos:
+    una retirada puede confirmar ausencia aunque el desmontaje haya fallado.
+    """
+    report = {'estado_inicial':'desconocido', 'estado_final':'desconocido',
+              'ausente_confirmado':False, 'errores':[]}
+
+    def call(arguments, operation):
+        try:
+            return runtime_call(arguments)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            report['errores'].append({'operacion':operation, 'error':str(exc)[:1024]})
+            return None
+
+    def existence(operation):
+        checked = call(['volume', 'exists', name], operation)
+        if checked is None:
+            return 'desconocido'
+        if checked.returncode == 1:
+            return 'ausente'
+        if checked.returncode == 0:
+            return 'presente'
+        report['errores'].append({'operacion':operation,
+            'error':checked.stderr.strip()[:1024] or 'No se pudo comprobar la existencia del volumen'})
+        return 'desconocido'
+
+    report['estado_inicial'] = existence('comprobar_antes')
+    if report['estado_inicial'] == 'ausente':
+        report.update(estado_final='ausente', ausente_confirmado=True)
+        return report  # Incluye la preparación que falló antes de crear el volumen.
+    for operation, command in (
+        ('desmontar', ['unshare', 'podman', 'volume', 'unmount', name]),
+        ('retirar', ['volume', 'rm', name]),
+    ):
+        completed = call(command, operation)
+        if completed is not None and completed.returncode:
+            report['errores'].append({'operacion':operation,
+                'error':completed.stderr.strip()[:1024] or f'Operación fallida: {operation}'})
+    report['estado_final'] = existence('comprobar_despues')
+    report['ausente_confirmado'] = report['estado_final'] == 'ausente'
+    if report['estado_final'] == 'presente':
+        report['errores'].append({'operacion':'comprobar_despues',
+                                 'error':'El volumen sigue presente: ' + name})
+    return report
 
 
 def run_isolated(command, workspace, log, timeout, *, materials, runner, output_limits=None):
@@ -175,6 +215,28 @@ def run_isolated(command, workspace, log, timeout, *, materials, runner, output_
         'contenedor':name, 'volumen_resultados':volume, 'limites_salida':limits, 'limpieza_confirmada':False}
     pending = None
     attempted = volume_attempted = False
+    phase = 'preparacion'
+
+    def failure(message, bucket, **details):
+        # Mantener el primer diagnóstico y el estado de fallo existente (por
+        # ejemplo timeout o cuota). Los fallos posteriores se anotan aparte.
+        message = message[:1024]
+        result.setdefault(bucket, []).append({**details, 'error':message})
+        if not result['error']:
+            result['error'] = message
+        if result['estado'] == 'finalizada':
+            result['estado'] = 'error_inicio'
+
+    def retire_container():
+        nonlocal attempted
+        try:
+            cleanup(name)
+            attempted = False
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            failure('Limpieza del contenedor fallida: ' + str(exc), 'errores_limpieza',
+                    recurso='contenedor', operacion='retirar')
+        return not attempted
+
     try:
         require_runtime()
         volume_attempted = True
@@ -185,6 +247,7 @@ def run_isolated(command, workspace, log, timeout, *, materials, runner, output_
                                    result_volume=volume, result_target=log.absolute())
         isolation['comando_runtime'] = actual
         attempted = True
+        phase = 'ejecucion'
         try:
             executed = runner(actual, workspace, log, timeout, env_policy='podman',
                 output_limits=limits, monitor_command=['podman', '--remote=false',
@@ -197,43 +260,67 @@ def run_isolated(command, workspace, log, timeout, *, materials, runner, output_
             result.update(estado='error_inicio', error='El contenedor no pudo iniciar con el aislamiento exigido; ver stderr.txt')
         if result['estado'] == 'tiempo_agotado':
             result['error'] = f'La evaluación aislada agotó su límite de {timeout} segundos; contenedor {name}'
-        cleanup(name)
-        attempted = False
-        # El kernel ya limitó cada escritura en el tmpfs; esta comprobación
-        # final cierra la carrera entre el último sondeo y la salida del hijo.
-        usage = result_volume_usage(path, limits)
-        result['uso_resultados'] = usage
-        if usage['excedido'] and result['estado'] != 'tiempo_agotado':
-            result.update(estado='limite_salida', salida_excedida='resultados',
-                          error='Límite de resultados alcanzado')
-        if result['estado'] == 'finalizada':
-            collect_result_volume(path, log, limits)
+        if retire_container():
+            # El kernel ya limitó cada escritura en el tmpfs; esta comprobación
+            # final cierra la carrera entre el último sondeo y la salida del hijo.
+            phase = 'comprobar_resultados'
+            usage = result_volume_usage(path, limits)
+            result['uso_resultados'] = usage
+            if usage['excedido'] and result['estado'] != 'tiempo_agotado':
+                if not result['error']:
+                    result.update(estado='limite_salida', salida_excedida='resultados',
+                                  error='Límite de resultados alcanzado')
+            if result['estado'] == 'finalizada':
+                phase = 'recogida'
+                collect_result_volume(path, log, limits)
+    except KeyboardInterrupt as exc:
+        result['estado'] = 'interrumpida'
+        failure(str(exc) or 'Evaluación interrumpida', 'errores_operacion', fase=phase)
+        pending = ProcessInterrupted(result)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-        result.update(estado='error_inicio', error='Aislamiento no disponible: ' + str(exc)[:1024])
+        if phase == 'recogida':
+            failure('Recogida de resultados fallida: ' + str(exc), 'errores_recogida', fase=phase)
+        else:
+            failure('Aislamiento no disponible: ' + str(exc), 'errores_operacion', fase=phase)
     finally:
-        container_clean = not attempted
-        if attempted:
-            try:
-                cleanup(name)
-                container_clean = True
-            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-                result.update(estado='error_inicio', error='Limpieza del contenedor fallida: ' + str(exc)[:1024])
+        container_clean = retire_container() if attempted else True
         volume_clean = not volume_attempted
         if volume_attempted and container_clean:
             try:
-                cleanup_result_volume(volume)
-                volume_clean = True
+                report = cleanup_result_volume(volume)
+                isolation['limpieza_volumen'] = report
+                volume_clean = report['ausente_confirmado'] is True
+                for error in report['errores']:
+                    failure('Limpieza del volumen fallida: ' + error['error'], 'errores_limpieza',
+                            recurso='volumen', operacion=error['operacion'])
+                if not volume_clean and not report['errores']:
+                    failure('No se pudo confirmar la ausencia del volumen', 'errores_limpieza',
+                            recurso='volumen', operacion='comprobar_despues')
             except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-                result.update(estado='error_inicio', error='Limpieza del volumen fallida: ' + str(exc)[:1024])
+                failure('Limpieza del volumen fallida: ' + str(exc), 'errores_limpieza',
+                        recurso='volumen', operacion='retirar')
         isolation['limpieza_confirmada'] = container_clean and volume_clean
         for channel in ('stdout.txt','stderr.txt'):
-            (log/channel).touch(exist_ok=True)
-        if result['error']:
-            append_diagnostic(log, result['error'], limits)
-        # Un informe parcial nunca se conserva como candidato a validación.
+            try:
+                (log/channel).touch(exist_ok=True)
+            except OSError as exc:
+                failure('Registro del canal fallido: ' + str(exc), 'errores_limpieza',
+                        recurso=channel, operacion='registrar')
+        # Un fallo de retirada no puede impedir que se guarde resultado.json.
+        # No seguir ni retirar recursivamente directorios con nombres de informe.
         if result['estado'] != 'finalizada':
             for name_report in ('pruebas.json', 'pruebas.tmp'):
-                (log/name_report).unlink(missing_ok=True)
+                try:
+                    (log/name_report).unlink(missing_ok=True)
+                except OSError as exc:
+                    failure('Retirada del informe parcial fallida: ' + str(exc), 'errores_limpieza',
+                            recurso=name_report, operacion='retirar_parcial')
+        if result['error']:
+            try:
+                append_diagnostic(log, result['error'], limits)
+            except OSError as exc:
+                failure('Registro del diagnóstico fallido: ' + str(exc), 'errores_limpieza',
+                        recurso='stderr.txt', operacion='registrar')
         result.update(fin_utc=timestamp(), duracion_segundos=time.monotonic()-started)
         write_json(log/'resultado.json', result)
     if pending is not None:

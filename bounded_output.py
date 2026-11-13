@@ -62,17 +62,33 @@ def collect_output(source, destination, limits=None):
     """Copiar solo archivos regulares, con presupuesto agregado durante la copia."""
     limits = output_limits(limits)
     source, destination = Path(source), Path(destination)
-    remaining, count = limits['resultados'], 0
+    # El contenedor ya está retirado. Validar el árbol completo antes de crear
+    # ningún destino, incluidos tipos de raíz y presupuesto agregado.
+    plan, size = [], 0
     for path in sorted(source.rglob('*')):
-        count += 1
-        if count >= limits['inodos']:
+        if len(plan) + 1 >= limits['inodos']:
             raise ValueError('Límite de inodos de resultados excedido')
-        if path.relative_to(source).parts[0] not in ('pruebas.json', 'pruebas.tmp', 'consultas'):
+        relative = path.relative_to(source)
+        root = relative.parts[0]
+        if root not in ('pruebas.json', 'pruebas.tmp', 'consultas'):
             raise ValueError('Salida no declarada del evaluador')
         info = path.lstat()
         if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
             raise ValueError('Salida del evaluador no regular')
-        target = destination/path.relative_to(source)
+        if root in ('pruebas.json', 'pruebas.tmp'):
+            if len(relative.parts) != 1 or not stat.S_ISREG(info.st_mode):
+                raise ValueError(f'Salida del evaluador no regular: {root} debe ser un archivo regular')
+        elif len(relative.parts) == 1 and not stat.S_ISDIR(info.st_mode):
+            raise ValueError('consultas debe ser un directorio')
+        if stat.S_ISREG(info.st_mode):
+            size += info.st_size
+            if size > limits['resultados']:
+                raise ValueError('Límite agregado de resultados excedido')
+        plan.append((path, relative, info))
+
+    remaining = limits['resultados']
+    for path, relative, info in plan:
+        target = destination/relative
         if stat.S_ISDIR(info.st_mode):
             target.mkdir(exist_ok=True)
         else:
@@ -205,4 +221,10 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as exc:
+        # La causa no debe perderse detrás de un traceback truncado por el
+        # presupuesto del registro de control.
+        print(f'{type(exc).__name__}: {exc}', file=sys.stderr)
+        sys.exit(1)

@@ -57,7 +57,40 @@ class BoundedOutputTests(unittest.TestCase):
         other = self.root/'other'; other.mkdir()
         with self.assertRaisesRegex(ValueError, 'agregado'):
             quota.collect_output(source, other, self.limits)
-        self.assertLessEqual(sum(p.stat().st_size for p in other.rglob('*') if p.is_file()), 16384)
+        self.assertEqual(list(other.iterdir()), [])
+
+    def test_estructura_entera_se_valida_antes_de_la_primera_copia(self):
+        for index, invalid in enumerate(('pruebas.json', 'pruebas.tmp', 'consultas')):
+            with self.subTest(invalid=invalid):
+                root = self.root/str(index)
+                source, target = root/'source', root/'target'
+                source.mkdir(parents=True); target.mkdir()
+                if invalid == 'consultas':
+                    (source/'consultas').write_text('Esto no es un directorio')
+                else:
+                    (source/'consultas').mkdir()
+                    (source/'consultas/a').write_text('Archivo válido que aún no debe copiarse')
+                if invalid != 'pruebas.json':
+                    (source/'pruebas.json').write_text('{"completo":true}')
+                else:
+                    (source/'pruebas.json').mkdir()
+                    (source/'pruebas.json/incorrecto').write_text('No es un informe regular')
+                if invalid == 'pruebas.tmp':
+                    (source/'pruebas.tmp').mkdir()
+                with self.assertRaises(ValueError):
+                    quota.collect_output(source, target, self.limits)
+                self.assertEqual(list(target.iterdir()), [])
+
+    def test_informe_y_temporal_regulares_y_consultas_conservan_sus_bytes(self):
+        source, target = self.root/'source', self.root/'target'
+        (source/'consultas/subdir').mkdir(parents=True); target.mkdir()
+        entries = {'pruebas.json':b'{"version":1,"completo":true}\n',
+                   'pruebas.tmp':b'{"completo":false}', 'consultas/subdir/datos':b'SINTETICO'}
+        for name, data in entries.items():
+            (source/name).write_bytes(data)
+        self.assertEqual(quota.collect_output(source, target, self.limits), sum(map(len, entries.values())))
+        for name, data in entries.items():
+            self.assertEqual((target/name).read_bytes(), data)
 
     def test_no_acepta_un_directorio_ordinario_en_lugar_de_tmpfs(self):
         with self.assertRaises(RuntimeError):

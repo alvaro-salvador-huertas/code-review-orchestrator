@@ -29,7 +29,9 @@ class PythonEvaluatorTests(unittest.TestCase):
         self.marker = self.root / 'HOST_EXECUTED'
         for name, value in (('prepare_result_volume', '/tmp/volumen-simulado'),
                             ('result_volume_usage', {'excedido':False}),
-                            ('collect_result_volume', None), ('cleanup_result_volume', None)):
+                            ('collect_result_volume', None), ('cleanup_result_volume',
+                                {'estado_inicial':'presente', 'estado_final':'ausente',
+                                 'ausente_confirmado':True, 'errores':[]})):
             mocked = patch.object(sandbox, name, return_value=value)
             mocked.start()
             self.addCleanup(mocked.stop)

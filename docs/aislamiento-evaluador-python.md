@@ -408,9 +408,11 @@ El exceso puede quedar en el pipe o en un bloque pequeño de memoria del
 capturador; nunca se escribe en los archivos más allá de la cuota. Se mantiene
 `--log-driver=none` para evitar otra copia sin tope del stream en los logs de Podman.
 
-Después de detener y retirar el contenedor, la copia de resultados valida las
-rutas permitidas, rechaza enlaces y archivos especiales, y descuenta cada bloque
-escrito de un presupuesto agregado. El volumen se desmonta, elimina y verifica
+Después de detener y retirar el contenedor, la copia de resultados valida todo
+el árbol antes de crear destinos: `pruebas.json` y `pruebas.tmp` deben ser archivos
+regulares, y `consultas/`, si existe, un directorio. Rechaza enlaces y archivos
+especiales y comprueba el presupuesto agregado antes de la primera copia;
+además descuenta cada bloque escrito durante la copia. El volumen se desmonta, elimina y verifica
 por nombre, incluso tras errores. `limpieza_confirmada` exige tanto contenedor
 como volumen retirados. No se usa `prune` ni se modifica el HOME personal.
 
@@ -482,6 +484,95 @@ La sintaxis inicial `--mount ... volume-nocopy` no era admitida por Podman 4.9.3
 se corrigió a `--volume volumen:destino:nocopy`. Los intentos rechazados se
 limpiaron sin ejecutar candidatos ni sustituir la cuota por almacenamiento sin
 límite. No se relajaron seccomp, AppArmor, namespaces ni las demás protecciones.
+
+
+## Correcciones de cierre tras la revisión de 4d64899
+
+Se partió del worktree limpio en
+`4d64899ea881e9a776c7df397972df17c53fd60c`, sin modificar la PR #27 ni subir los
+cambios locales. Los límites de resultados, stdout y stderr se conservan.
+
+### Preparación parcial y diagnóstico de limpieza
+
+`cleanup_result_volume()` consulta la existencia inicial. Si el volumen no
+existe (por ejemplo, falló su creación), registra `estado_inicial=ausente` y
+confirma la ausencia sin tratarlo como un recurso abandonado. Si existe o no
+puede comprobarse, intenta desmontarlo y después **intenta siempre retirarlo
+por su nombre**, aunque el desmontaje falle o lance una excepción. La retirada
+usa `podman volume rm nombre`, sin `--force`: no autoriza eliminar contenedores
+asociados. Por último consulta su existencia y distingue ausencia confirmada,
+volumen todavía presente y comprobación no disponible.
+
+El informe `aislamiento.limpieza_volumen` conserva esas observaciones y los
+fallos de cada operación. La ausencia del recurso y el éxito de todos los
+comandos son hechos distintos: puede retirarse un volumen tras un fallo de
+desmontaje. Se registra ese fallo y se mantiene la evaluación en estado de
+fallo incluso cuando se pudo confirmar que ya no quedan recursos.
+
+`error` conserva el primer diagnóstico de la ejecución, preparación o recogida;
+los fallos posteriores de limpieza se guardan aparte en `errores_limpieza` con
+recurso y operación. No sustituyen el error de montaje, de cuota o de timeout.
+Un timeout sigue siendo `tiempo_agotado`; si la ejecución aún figuraba como
+finalizada, cualquier fallo posterior cambia su estado a fallo y evita su
+acreditación. `limpieza_confirmada` solo describe la ausencia de contenedor y
+volumen, no borra los errores ocurridos durante su retirada.
+
+### Estructura y fallos durante la recogida
+
+Se valida la estructura completa y el presupuesto agregado antes de escribir
+el primer archivo de salida. Un directorio llamado `pruebas.json` o
+`pruebas.tmp`, un archivo llamado `consultas`, enlaces o entradas no declaradas
+se rechazan sin copiar el árbol. Los informes válidos y sus temporales regulares
+conservan sus bytes; el límite durante la copia sigue actuando.
+
+Los errores de recogida se conservan en `error` y `errores_recogida`. Si queda
+un informe parcial y su `unlink` falla (por ejemplo, es un directorio o se
+deniega la retirada), se anota en `errores_limpieza` y se continúa hasta guardar
+`resultado.json` con estado de fallo. No se siguen ni se borran recursivamente
+directorios con nombres de informe. Si un parcial permanece en disco, ese hecho
+queda registrado y el estado del proceso impide que se considere evaluación
+válida. Los diagnósticos añadidos a stderr siguen respetando su límite.
+
+Esto no promete guardar metadatos si el propio almacenamiento de
+`resultado.json` deja de poder escribirse: esa imposibilidad de almacenamiento
+sigue siendo un error del controlador, nunca una evaluación válida.
+
+### Regresiones y ejecución real
+
+Las pruebas con fallos inyectados cubren creación ausente, montaje fallido de
+un volumen creado, desmontaje fallido seguido de retirada, volumen que sigue
+presente, diagnóstico de timeout con fallo secundario y fallo al retirar un
+informe parcial. Comprueban que el candidato no se invoca cuando falla la
+preparación, que la retirada del volumen no fuerza contenedores y que se guarda
+el diagnóstico original por separado de la limpieza.
+
+Otras regresiones comprueban que ninguna entrada se copia antes de validar
+los tipos de raíz, y que los JSON válidos, los temporales y las consultas
+conservan sus bytes y sus presupuestos. Son fallos simulados y comprobaciones
+locales explícitas, distintos de la integración real.
+
+En Ubuntu 24.04.5 con Podman rootless 4.9.3, las **10 integraciones reales
+pasaron en 33.474 s**. Se mantienen los casos de límites y limpieza; el caso del
+informe válido también ejecuta un candidato que crea `pruebas.json` como
+directorio. Se comprueba su rechazo, que no se copian consultas ni informes,
+que se guarda `resultado.json`, que se conserva la causa y que se retiran el
+contenedor y el volumen.
+
+En ese mismo caso también se crea un volumen real y se inyectan únicamente los
+retornos de error al montar y desmontar. Podman ejecuta la creación, la retirada
+sin `--force` y las consultas de existencia reales. Se confirma que el candidato
+no se invoca, que el diagnóstico inicial se conserva separado del desmontaje y
+que el volumen creado queda ausente. Esa inyección se distingue de un fallo
+espontáneo del kernel o del runtime.
+
+La suite ordinaria (`env -u CRO_REAL_PODMAN python3 -B -m unittest discover -s tests -v`)
+terminó con **844 pruebas: 834 correctas y 10 integraciones opt-in omitidas**,
+sin errores ni fallos, en **295.261 s**. Incluye 33 pruebas específicas: 16 del
+aislamiento, 9 del capturador/recogida y 8 de preparación parcial y finalización.
+Las 10 omisiones se ejecutaron por separado con Podman real. `git diff --check`
+pasó y la comprobación posterior no encontró contenedores, volúmenes de prueba
+ni monitores de cuota restantes. La PR #27 se mantiene en borrador; este cierre
+se guarda únicamente en un commit local, sin publicarlo.
 
 ## Fuera de esta primera PR
 
