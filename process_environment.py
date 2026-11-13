@@ -36,7 +36,7 @@ def process_environment(policy="evaluation"):
     Codex conserva solo su lista permitida. Ni nombres ni valores de variables
     se incorporan a los registros. Los hijos normales heredan el entorno reducido.
     """
-    if policy not in ("evaluation", "codex"):
+    if policy not in ("evaluation", "codex", "podman"):
         raise ValueError("Política de entorno desconocida")
     environment = base_environment()
     if policy == "codex":
@@ -60,4 +60,22 @@ def process_environment(policy="evaluation"):
         # También se utiliza para consultas Git del controlador, sin configuración personal.
         environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                            GIT_TERMINAL_PROMPT="0")
+        if policy == "podman":
+            # Solo la CLI local recibe estas rutas del almacén rootless;
+            # ninguna se pasa al proceso dentro del contenedor.
+            for name in ("HOME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME"):
+                if name in os.environ:
+                    environment[name] = os.environ[name]
+                else:
+                    environment.pop(name, None)
+            config = root / "config/containers"
+            config.mkdir()
+            hooks = root / "hooks"
+            hooks.mkdir()
+            (config / "containers.conf").write_text(
+                f'[containers]\nvolumes = []\n[engine]\nhooks_dir = ["{hooks}"]\n')
+            environment["CONTAINERS_CONF"] = str(config / "containers.conf")
+            auth = root / "auth.json"
+            auth.write_text('{"auths":{}}')
+            environment["REGISTRY_AUTH_FILE"] = str(auth)
         yield environment

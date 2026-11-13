@@ -64,6 +64,8 @@ class ExportCsvFlowTests(unittest.TestCase):
                      "project_test_inventory.py", "review_case.py", "review_project.py",
                      self.config["desarrollo"], self.config["revision"]):
             self.write(name, (ROOT / name).read_text())
+        from evaluator_stub import install
+        install(self)
         self.write(self.config["suites"]["aceptacion"], ACCEPTANCE)
         self.select_base()
         patch.object(review_case, "CODEX_EXECUTABLE", str(self.fake)).start()

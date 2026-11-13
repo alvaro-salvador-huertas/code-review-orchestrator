@@ -60,6 +60,8 @@ class ConfigurableProjectTests(unittest.TestCase):
         self.base = self.git("rev-parse", "HEAD").decode().strip()
         for name in ENGINE:
             self.write(name, (ROOT / name).read_text())
+        from evaluator_stub import install
+        install(self)
         self.configs = {}
         for task, editable, initial in (("marcador-alfa", "alpha.py", "existente"),
                                         ("marcador-beta", "beta.py", "ausente")):

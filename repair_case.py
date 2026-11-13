@@ -69,8 +69,13 @@ def stop_process(process):
 
 
 def run_process(command, workspace, log_dir, timeout, prompt=None,
-                stdout_name="stdout.txt", stderr_name="stderr.txt", *, env_policy="evaluation"):
+                stdout_name="stdout.txt", stderr_name="stderr.txt", *, env_policy="evaluation",
+                output_limits=None, monitor_command=None):
     """Registrar los canales en disco y detener el grupo al agotar el tiempo."""
+    if output_limits is not None:
+        from bounded_output import run_bounded
+        return run_bounded(command, workspace, log_dir, timeout, limits=output_limits,
+                           monitor_command=monitor_command, env_policy=env_policy)
     log_dir.mkdir(exist_ok=True)
     started = time.monotonic()
     result = {

@@ -167,3 +167,7 @@ ejecución ni convierte automáticamente los checks en obligatorios para un merg
 **`runs/` permanece fuera de Git.** Contiene registros locales y no es necesario
 para la demo ni para las pruebas automatizadas. Los documentos publicados
 resumen la evidencia y sus límites sin incorporar esos registros privados.
+
+El inventario y la evaluación Python de `orchestrate_project.py` requieren
+Podman rootless y una imagen preparada previamente. Consulta la
+[preparación, alcance y comprobaciones del aislamiento](docs/aislamiento-evaluador-python.md).

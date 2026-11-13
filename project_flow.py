@@ -6,13 +6,13 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 
 from case_evidence import digest, parse_json, read_regular, require, unified_diff
 from process_environment import process_environment
+from python_evaluator import PYTHON, run_isolated, validate_isolation, check_isolated_process
 from repair_case import ProcessInterrupted, ProcessRecordError, run_process, write_json
-from repair_project import (PROJECT, ACCEPTANCE, EDITABLE, StopProject, check_process,
+from repair_project import (PROJECT, ACCEPTANCE, EDITABLE, StopProject,
                             classify_report, excluded, freeze, required, static_test_ids, tree_state)
 
 
@@ -25,7 +25,8 @@ SUITES = {"aceptacion": ACCEPTANCE, "regresion": None,
           "anidamiento": PUBLIC + "comprobar_anidamiento.py"}
 LIMITS = {"desarrollador": 300, "revisor": 180, "consulta_cli": 10,
           "aceptacion": 60, "regresion": 180, "hallazgos": 60, "anidamiento": 60}
-SUPPORT = ("repair_case.py", "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py")
+SUPPORT = ("repair_case.py", "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py",
+           "python_evaluator.py", "bounded_output.py")
 CSV_BASE = "4cda45e2ccda3f7091f8ab15e55087516c09bec0"
 CSV_LIMITS = {"desarrollador": 300, "revisor": 300, "consulta_cli": 10,
               "aceptacion": 60, "regresion": 300, "inventario": 30}
@@ -168,10 +169,11 @@ def inventory_base(destination, config, provenance):
     before = snapshot(source)
     log.mkdir()
     write_json(log / "base_antes.json", before)
-    command = [str(Path(sys.executable).resolve()), "-B", str(authority / "project_test_inventory.py"),
+    command = [PYTHON, "-B", str(authority / "project_test_inventory.py"),
                "--reference", str(source), "--timeout", str(config["limites"]["inventario"])]
-    process = run_process(command, source, log, config["limites"]["inventario"], env_policy="evaluation")
-    check_process(process)
+    process = run_isolated(command, source, log, config["limites"]["inventario"],
+                           materials=(authority,), runner=run_process)
+    check_isolated_process(process)
     require(snapshot(source) == before, "El inventario alteró la base de confianza")
     raw = required(log / "stdout.txt")
     (log / "informe.json").write_bytes(raw)
@@ -186,6 +188,7 @@ def validate_inventory(destination, config, provenance):
     raw = required(destination / "inventario/informe.json")
     report = parse_json(raw)
     process = parse_json(required(destination / "inventario/resultado.json"))
+    validate_isolation(process, materials=(destination / "autoridades",), log=destination / "inventario")
     ids = report["identidades"]
     stamp = provenance["inventario"]
     require(raw == required(destination / "inventario/stdout.txt") and digest(raw) == stamp["informe_sha256"]
@@ -198,7 +201,7 @@ def validate_inventory(destination, config, provenance):
             "Inventario incompleto o inválido")
     require(report["referencia"] == str(destination / "proyecto")
             and report["arbol_antes_sha256"] == report["arbol_despues_sha256"] == stamp["base_antes_sha256"]
-            and report["politica_entorno"] == "evaluation" and Path(report["interprete"]).is_absolute()
+            and report["politica_entorno"] == "evaluation" and report["interprete"] == PYTHON
             and report["timeout_segundos"] == config["limites"]["inventario"]
             and report["utilidad_sha256"] == digest(required(destination / "autoridades/project_test_inventory.py"))
             and report["entorno_sha256"] == digest(required(destination / "autoridades/process_environment.py")),
@@ -287,7 +290,7 @@ def freeze_flow(root, destination, max_attempts, task="inspect-json"):
 
 def evaluation_command(frozen, workspace, log, kind, task="inspect-json"):
     suites = task_config(task)["suites"]
-    command = [sys.executable, "-B", str(frozen / "project_flow_runner.py"),
+    command = [PYTHON, "-B", str(frozen / "project_flow_runner.py"),
                "--project", str(workspace), "--report", str(log / "pruebas.json")]
     if suites[kind]:
         command += ["--acceptance", str(frozen / "autoridades" / suites[kind])]
@@ -339,12 +342,14 @@ def evaluate_flow(workspace, frozen, directory, expected, results, progress, che
         write_json(log / "proyecto_evaluado.json", before)
         try:
             try:
-                item["proceso"] = run_process(evaluation_command(frozen, workspace, log, kind, task),
-                                               workspace, log, config["limites"][kind], env_policy="evaluation")
+                item["proceso"] = run_isolated(evaluation_command(frozen, workspace, log, kind, task),
+                                               workspace, log, config["limites"][kind],
+                                               materials=(frozen / "project_flow_runner.py", frozen / "autoridades"),
+                                               runner=run_process)
             except (ProcessInterrupted, ProcessRecordError) as exc:
                 item["proceso"] = exc.result
                 raise
-            check_process(item["proceso"])
+            check_isolated_process(item["proceso"])
             try:
                 item.update(flow_counts(required(log / "pruebas.json"), expected[kind], item["proceso"],
                                         required(log / "stderr.txt").decode()))
@@ -528,6 +533,8 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
         def validate_evaluation(source, prefix, kind, wanted, saved=None):
             item = source.json(prefix + "/evaluacion.json")
             process = source.json(prefix + "/resultado.json")
+            validate_isolation(process, materials=(reference.path / "project_flow_runner.py",
+                                                   reference.path / "autoridades"), log=source.path / prefix)
             completed(process)
             require(item["proceso"] == process and (saved is None or item == saved)
                     and item["workspace_intacto"] is True and source.json(prefix + "/proyecto_evaluado.json") == wanted,
@@ -544,9 +551,7 @@ def validate_delivery(delivery_run, project_root=PROJECT, *, allow_failures=Fals
                         "Estado de archivo evaluado incoherente")
             command = evaluation_command(reference.path, Path(process["directorio_trabajo"]), source.path / prefix, kind,
                                          task if generic else cfg["tarea"])
-            # El intérprete absoluto queda registrado; no exigir la misma instalación al consultar.
-            require(Path(process["comando"][0]).is_absolute(), "Intérprete inválido")
-            command[0] = process["comando"][0]
+            # El intérprete pertenece a la imagen fijada, no a la instalación del anfitrión.
             require(process["comando"] == command and process["limite_segundos"] == limits[kind]
                     and process["politica_entorno"] == "evaluation", "Comando o límites distintos")
             counts = flow_counts(source.read(prefix + "/pruebas.json"), expected[kind], process,
