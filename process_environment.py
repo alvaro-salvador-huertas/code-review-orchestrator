@@ -70,7 +70,6 @@ def process_environment(policy="evaluation"):
                     environment.pop(name, None)
             config = root / "config/containers"
             config.mkdir()
-            (config / "mounts.conf").write_text("")
             hooks = root / "hooks"
             hooks.mkdir()
             (config / "containers.conf").write_text(

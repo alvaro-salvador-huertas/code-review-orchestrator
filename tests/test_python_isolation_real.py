@@ -112,6 +112,54 @@ time.sleep(300)
             self.assertEqual((result['estado'], result['codigo_salida']), ('finalizada', 0), result)
             self.assertFalse(marker.exists())
 
+    def test_5_montaje_automatico_del_home_no_es_visible(self):
+        # Conservar el almacén de la imagen sin usar el HOME personal ni tocarlo.
+        data_home = os.environ.get('XDG_DATA_HOME', str(Path.home()/'.local/share'))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root/'home'
+            config = home/'.config/containers'
+            config.mkdir(parents=True)
+            project = root/'project'
+            project.mkdir()
+            payload = 'SENUELO_SINTETICO_DE_MONTAJE_AUTOMATICO'
+            decoy = root/'senuelo.txt'
+            decoy.write_text(payload)
+            target = '/run/senuelo-automatico-' + uuid4().hex + '.txt'
+            mounts = config/'mounts.conf'
+            contents = f'{decoy}:{target}\n'
+            mounts.write_text(contents)
+            with patch.dict(os.environ, {'HOME':str(home), 'XDG_DATA_HOME':data_home}):
+                # Control positivo: solo un lector sintético, con los mismos
+                # límites y namespaces; retirar únicamente la opción corregida.
+                name = 'cro-eval-' + uuid4().hex
+                control = [sandbox.PYTHON, '-B', '-c',
+                           f'from pathlib import Path; assert Path({target!r}).read_text() == {payload!r}; '
+                           'print("MONTAJE_CONTROL_PRESENTE", flush=True)']
+                command = sandbox.container_command(name, control, project, [(project, project, False)])
+                command.remove('--default-mounts-file=/dev/null')
+                try:
+                    result = run_process(command, project, root/'control', 20, env_policy='podman')
+                finally:
+                    sandbox.cleanup(name)
+                self.assertEqual((result['estado'], result['codigo_salida']), ('finalizada', 0), result)
+                self.assertIn('MONTAJE_CONTROL_PRESENTE', (root/'control/stdout.txt').read_text())
+
+                # Esta invocación usa el evaluador de producción, sin sustituir
+                # el runtime ni sus controles. El montaje automático debe faltar.
+                code = f'''from pathlib import Path
+assert not Path({target!r}).exists(), 'El montaje automático del HOME es visible'
+print('MONTAJE_AUTOMATICO_BLOQUEADO', flush=True)
+'''
+                result = sandbox.run_isolated([sandbox.PYTHON, '-B', '-c', code], project,
+                                               root/'log', 20, materials=(), runner=run_process)
+                self.assertEqual((result['estado'], result['codigo_salida']), ('finalizada', 0), result)
+                self.assertTrue(result['aislamiento']['limpieza_confirmada'])
+                sandbox.validate_isolation(result, materials=(), log=root/'log')
+                self.assertIn('MONTAJE_AUTOMATICO_BLOQUEADO', (root/'log/stdout.txt').read_text())
+            self.assertEqual(mounts.read_text(), contents)
+            self.assertEqual(decoy.read_text(), payload)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -65,6 +65,7 @@ class PythonEvaluatorTests(unittest.TestCase):
                      '--memory-swap=512m', '--http-proxy=false', '--cgroupns=private'):
             self.assertIn(flag, command)
         self.assertIn(sandbox.IMAGE, command)
+        self.assertLess(command.index('--default-mounts-file=/dev/null'), command.index('run'))
         self.assertIn('ro=true', command[command.index('--mount')+1])
         with patch.dict(os.environ, {'OPENAI_API_KEY':'SYNTHETIC', 'CONTAINER_HOST':'unix:///bad',
                                      'CONTAINERS_CONF':'/bad', 'HTTP_PROXY':'SYNTHETIC'}):
@@ -73,7 +74,7 @@ class PythonEvaluatorTests(unittest.TestCase):
                 self.assertNotIn('CONTAINER_HOST', env)
                 self.assertNotIn('HTTP_PROXY', env)
                 self.assertNotEqual(env['CONTAINERS_CONF'], '/bad')
-                self.assertEqual((Path(env['XDG_CONFIG_HOME'])/'containers/mounts.conf').read_text(), '')
+                self.assertFalse((Path(env['XDG_CONFIG_HOME'])/'containers/mounts.conf').exists())
 
     def test_timeout_limpia_contenedor_y_conserva_diagnostico(self):
         def timed_out(*args, **kwargs):
@@ -113,9 +114,20 @@ class PythonEvaluatorTests(unittest.TestCase):
                                                              self.project, mounts)
         result = {'comando':self.command, 'directorio_trabajo':str(self.project), 'aislamiento':stamp}
         sandbox.validate_isolation(result, materials=(), log=self.log)
-        stamp['comando_runtime'][stamp['comando_runtime'].index('--network=none')] = '--network=host'
-        with self.assertRaisesRegex(ValueError, 'Controles o montajes'):
-            sandbox.validate_isolation(result, materials=(), log=self.log)
+        original = stamp['comando_runtime'].copy()
+        for flag, replacement in (('--network=none', '--network=host'),
+                                  ('--default-mounts-file=/dev/null', '--default-mounts-file=/tmp/ajeno'),
+                                  ('--default-mounts-file=/dev/null', None)):
+            with self.subTest(flag=flag, replacement=replacement):
+                changed = original.copy()
+                index = changed.index(flag)
+                if replacement is None:
+                    changed.pop(index)
+                else:
+                    changed[index] = replacement
+                stamp['comando_runtime'] = changed
+                with self.assertRaisesRegex(ValueError, 'Controles o montajes|Comando Podman incompleto'):
+                    sandbox.validate_isolation(result, materials=(), log=self.log)
 
     def test_runtime_rootful_o_sin_cgroups_no_se_admite(self):
         for rootless, version in ((False, 'v2'), (True, 'v1')):
@@ -132,7 +144,7 @@ class PythonEvaluatorTests(unittest.TestCase):
         valid = {'/proc/self/status': status, '/proc/self/cgroup': '0::/\n',
                  '/sys/fs/cgroup/memory.max': str(sandbox.MEMORY),
                  '/sys/fs/cgroup/pids.max': str(sandbox.PIDS),
-                 '/sys/fs/cgroup/memory.swap.max': '0'}
+                 '/sys/fs/cgroup/memory.swap.max': '0', '/sys/fs/cgroup/cpu.max':'100000 100000'}
         failures = ({'/sys/fs/cgroup/memory.max':'max'}, {'/sys/fs/cgroup/pids.max':'max'},
                     {'/sys/fs/cgroup/memory.swap.max':'max'},
                     {'/proc/self/status':status.replace('NoNewPrivs: 1', 'NoNewPrivs: 0')},
@@ -148,6 +160,58 @@ class PythonEvaluatorTests(unittest.TestCase):
                     exec(sandbox.BOOTSTRAP, {})
                 self.assertEqual(stopped.exception.code, 125)
                 execute.assert_not_called()
+
+    def cpu_probe(self, cpu, group='/'):
+        prefix = '/sys/fs/cgroup' + group.rstrip('/')
+        files = {'/proc/self/status':'NoNewPrivs: 1\nCapEff: 0\nSeccomp: 2\n',
+                 '/proc/self/cgroup':'0::' + group + '\n',
+                 prefix + '/memory.max':str(sandbox.MEMORY), prefix + '/pids.max':str(sandbox.PIDS),
+                 prefix + '/memory.swap.max':'0', prefix + '/cpu.max':cpu}
+        diagnostics = io.StringIO()
+        with patch.object(os, 'getuid', return_value=1000), patch.object(os, 'listdir', return_value=['lo']), \
+             patch.object(Path, 'read_text', lambda p: files[str(p)]), patch.object(Path, 'mkdir'), \
+             patch.object(sys, 'argv', ['sonda', json.dumps(self.command)]), \
+             patch.object(os, 'execve', side_effect=SystemExit(0)) as execute, redirect_stderr(diagnostics):
+            with self.assertRaises(SystemExit) as stopped:
+                exec(sandbox.BOOTSTRAP, {})
+        return stopped.exception.code, execute.called, diagnostics.getvalue()
+
+    def test_cpu_ilimitada_impide_ejecutar_candidato(self):
+        code, executed, error = self.cpu_probe('max 100000')
+        self.assertEqual(code, 125)
+        self.assertFalse(executed)
+        self.assertIn('cpu.max sin cuota finita', error)
+        self.assertFalse(self.marker.exists())
+
+    def test_cpu_superior_a_una_o_no_positiva_impide_ejecutar_candidato(self):
+        for cpu in ('200000 100000', '0 100000', '-1 100000', '100000 0', '100000 -1'):
+            with self.subTest(cpu=cpu):
+                code, executed, error = self.cpu_probe(cpu, '/evaluacion')
+                self.assertEqual(code, 125)
+                self.assertFalse(executed)
+                self.assertIn('cpu.max', error)
+        self.assertFalse(self.marker.exists())
+
+    def test_cpu_valida_permite_exec_en_el_mismo_cgroup(self):
+        for cpu in ('100000 100000', '50000 100000'):
+            with self.subTest(cpu=cpu):
+                code, executed, error = self.cpu_probe(cpu, '/evaluacion')
+                self.assertEqual(code, 0)
+                self.assertTrue(executed)
+                self.assertEqual(error, '')
+        self.assertFalse(self.marker.exists())
+
+    def test_opcion_de_montajes_rechazada_no_reintenta_en_host(self):
+        def refused(command, workspace, log, timeout, **kwargs):
+            self.assertIn('--default-mounts-file=/dev/null', command)
+            (log/'stderr.txt').write_text('unknown flag: --default-mounts-file\n')
+            return {'estado':'finalizada', 'codigo_salida':125, 'error':None}
+        with patch.object(sandbox, 'require_runtime'), patch.object(sandbox, 'cleanup'):
+            result = sandbox.run_isolated(self.command, self.project, self.log, 1,
+                                           materials=(), runner=refused)
+        self.assertEqual(result['estado'], 'error_inicio')
+        self.assertFalse(self.marker.exists())
+        self.assertIn('unknown flag', (self.log/'stderr.txt').read_text())
 
     def test_controlador_se_detiene_antes_del_descubrimiento_y_candidato(self):
         # Base Git y autoridades reales del fixture; solo el runtime está simulado.

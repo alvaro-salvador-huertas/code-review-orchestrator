@@ -55,7 +55,9 @@ invocación vuelve a comprobar el runtime y ejecuta esa sonda dentro del propio
 contenedor **antes de importar los materiales del proyecto**. Comprueba UID no
 root, capacidades efectivas vacías, `NoNewPrivs`, seccomp activo, ausencia de
 interfaces externas y los valores efectivos de `memory.max`, `memory.swap.max`
-y `pids.max`. Una advertencia del runtime que implique límites ignorados no
+y `pids.max`, además de `cpu.max` en ese mismo cgroup. La cuota de CPU debe
+ser finita y cumplir `0 < cuota <= periodo` antes de ejecutar el candidato.
+Una advertencia del runtime que implique límites ignorados no
 permite ejecutar el candidato. Runtime ausente, imagen ausente, arranque fallido
 o controles inefectivos detienen el flujo con código 3 y diagnóstico; nunca se
 invoca Python del candidato en el anfitrión como alternativa.
@@ -63,6 +65,11 @@ invoca Python del candidato en el anfitrión como alternativa.
 ## Controles y materiales
 
 - Red `none`, descarga `never`, cliente local (`--remote=false`), sin proxies.
+- Montajes automáticos desactivados con la opción global
+  `--default-mounts-file=/dev/null`, situada antes de `run`. Podman 4.9.3 busca
+  `mounts.conf` en el HOME real aunque `XDG_CONFIG_HOME` sea temporal. Por eso
+  no se crea un `mounts.conf` temporal como protección. Si el runtime rechaza
+  la opción, el flujo se detiene; no se reintenta quitándola.
 - Usuario no root mediante `keep-id`, sin capacidades adicionales,
   `no-new-privileges`, seccomp predeterminado y namespaces privados de procesos,
   IPC, UTS y cgroups.
@@ -81,7 +88,8 @@ invoca Python del candidato en el anfitrión como alternativa.
   repositorios ajenos, sockets de agentes ni sockets Podman/Docker del anfitrión.
   La CLI Podman recibe HOME y rutas de almacenamiento/runtime del usuario para
   operar rootless, pero esas rutas **no se montan** en el contenedor. Usa
-  configuración efímera sin montajes automáticos, hooks ni credenciales.
+  configuración efímera sin hooks ni credenciales. La opción global de Podman
+  impide los montajes automáticos, conservando el almacenamiento rootless.
 
 Cada ejecución tiene un nombre `cro-eval-<uuid>`. Tras éxito, fallo, timeout o
 interrupción, el controlador ejecuta `podman rm --force --time=0 --ignore` sobre
@@ -120,11 +128,12 @@ marcador de ejecución en el anfitrión y una importación hostil durante el
 inventario. En ambos puntos el controlador se detiene antes de ejecutar el
 proyecto cuando no puede aplicar el aislamiento.
 
-Las cuatro integraciones opt-in usan Podman real, sin sustituirlo: recorrido
+Las cinco integraciones opt-in usan Podman real, sin sustituirlo: recorrido
 completo de un candidato válido con agentes sintéticos; señuelo fuera de
 montajes y destino TCP loopback controlado con datos sintéticos; timeout con
 hijo y comprobación de ausencia del contenedor y del proceso; inventario con
-importación que intentaría escribir fuera de los montajes. Cuando se habilitan,
+importación que intentaría escribir fuera de los montajes; HOME temporal con
+un montaje automático sintético que el evaluador debe bloquear. Cuando se habilitan,
 un runtime roto produce **fallos**, no skips silenciosos.
 
 ### Antecedente: sesión inicial del 11 de noviembre de 2026
@@ -168,7 +177,7 @@ En aquella sesión, las cuatro integraciones reales habilitadas explícitamente
 fallaron en el preflight rootless descrito arriba. `prepare` y `check` con el
 runtime ausente devolvieron código 1 y diagnóstico explícito.
 
-### Integración real verificada desde la terminal normal
+### Antecedente: cuatro integraciones originales desde la terminal normal
 
 El 13 de noviembre de 2026 se confirmó en **Ubuntu 24.04.5 con Podman rootless
 4.9.3**, desde una terminal normal, el siguiente resultado sobre un worktree
@@ -198,7 +207,7 @@ posterior: el runtime instalado y ejecutado desde la terminal normal sí permiti
 aplicar los controles del commit. La suite ordinaria mantiene las sustituciones
 explícitas de sus fixtures y debe distinguirse de esta integración real.
 
-### Suite ordinaria atribuible a la rama
+### Antecedente: suite ordinaria del commit original
 
 El 13 de noviembre de 2026 se ejecutó la suite ordinaria desde un **worktree
 limpio del commit `18d70b48366b81c0853bc183d962e0bbd601fa57`**, creado con
@@ -219,18 +228,22 @@ antes y después de la ejecución; no contenía los cuatro archivos locales sin
 seguimiento. La suite se ejecutó fuera del sandbox de la sesión para permitir
 los sockets de loopback de sus pruebas HTTP.
 
-Este es el recuento atribuible a la rama: las 10 pruebas locales ajenas que
+Este era el recuento atribuible al commit original: las 10 pruebas locales ajenas que
 inflaban la pasada anterior de 813 pruebas correctas están excluidas. Las
 cuatro omisiones de esta suite ordinaria corresponden a las integraciones
 opt-in; su ejecución real satisfactoria en 18.049 s se registra por separado
 arriba. Esta actualización posterior al commit probado cambia únicamente la
 documentación, sin modificar la implementación ni las pruebas.
 
-### Revisión del diff contra `main`
+### Antecedente: revisión inicial del diff contra `main`
 
 Se revisaron las llamadas desde `orchestrate_project.py`, la frontera de
 `python_evaluator.py`, su política de entorno y las pruebas del diff respecto
-a `main`. No se detectaron hallazgos bloqueantes dentro del alcance de esta PR:
+a `main`. En esa revisión inicial no se detectaron hallazgos bloqueantes. Una
+revisión posterior identificó la dependencia del HOME real para los montajes
+automáticos y la ausencia de comprobación de `cpu.max`; la versión corregida
+que se describe a continuación aborda ambos problemas. La revisión inicial
+comprobó los siguientes aspectos:
 
 - `inventory_base()` y `evaluate_flow()` invocan `run_isolated()`. Tanto el
   descubrimiento que importa módulos como los procesos de las pruebas quedan
@@ -250,6 +263,69 @@ a `main`. No se detectaron hallazgos bloqueantes dentro del alcance de esta PR:
 - Se conservan los criterios, los sellos de integridad y la aprobación humana.
   Las sustituciones del runtime están limitadas a los fixtures de la suite
   ordinaria; las cuatro integraciones habilitadas usan el contenedor real.
+
+
+## Versión corregida: montajes automáticos y CPU efectiva
+
+Se trabaja en la rama `fix/python-evaluator-mounts-cpu`, desde un worktree
+separado creado con `umask 022` a partir de `a720590`. Se incorporó
+`origin/main` (`52c73c9`, PR #26) mediante el merge `14f6b1b`, sin rebase ni
+reescritura del historial. Los cuatro nombres que estaban sin seguimiento en
+el checkout original ahora están versionados desde main en este worktree; no
+se copiaron ni modificaron los archivos locales originales.
+
+La corrección usa `--default-mounts-file=/dev/null` como opción global antes de
+`run`, elimina el archivo `mounts.conf` temporal y comprueba la cuota efectiva
+leyendo `cpu.max` en el mismo cgroup que la memoria y los procesos. La evidencia
+registrada debe contener la opción global: quitarla o cambiarla invalida esa
+evidencia. Las pruebas unitarias cubren el rechazo de la opción por el runtime,
+cuota ilimitada, cuota superior a una CPU, valores no positivos y cuotas válidas.
+
+La quinta integración configura exclusivamente un HOME temporal con
+`.config/containers/mounts.conf` y un archivo señuelo sintético. Conserva
+`XDG_DATA_HOME` del usuario habitual para acceder a la imagen ya preparada y
+mantiene el directorio de runtime rootless. Primero ejecuta un lector de datos
+sintéticos con los mismos límites y namespaces, retirando solo la opción global:
+el señuelo debe aparecer en ese control. Después, el evaluador de producción
+con la opción global debe impedir que ese montaje aparezca. Se verifica también
+la limpieza y que la configuración temporal y el señuelo no se modificaron. No
+se edita el HOME personal ni la configuración del sistema.
+
+### Resultados reales de la versión corregida
+
+El 13 de noviembre de 2026, en Ubuntu 24.04.5 con **Podman rootless 4.9.3 y
+cgroups v2**, se ejecutaron desde el nuevo worktree, como usuario habitual y
+fuera del sandbox de la sesión, los siguientes comandos:
+
+```sh
+python3 -B python_evaluator.py check
+CRO_REAL_PODMAN=1 python3 -B -m unittest discover -s tests -p test_python_isolation_real.py -v
+```
+
+`check` terminó con código 0, estado `finalizada`, sin error y con limpieza
+confirmada. La imagen fijada ya estaba disponible en el almacén rootless; no
+fue necesario ejecutar `prepare` ni descargarla de nuevo. Las **cinco
+integraciones reales pasaron en 20.145 s**, sin fallos, errores ni omisiones:
+
+| Integración real corregida | Resultado |
+| --- | --- |
+| Candidato válido: recorrido completo e informe para revisión humana | Correcto |
+| Señuelo externo y destino TCP loopback controlado | Inaccesible / bloqueado |
+| Timeout: diagnóstico y ausencia de contenedor y proceso descendiente | Correcto |
+| Inventario: importaciones sin escribir el marcador en el anfitrión | Correcto |
+| HOME temporal: control con montaje visible y evaluador con montaje bloqueado | Correcto |
+
+Las 16 pruebas unitarias específicas también pasaron. Estas usan sustituciones
+explícitas para probar los fallos y la sonda; se distinguen de las cinco
+integraciones anteriores, que arrancaron contenedores reales. No se desactivaron
+protecciones del sistema ni se relajaron los controles para obtener estos resultados.
+
+### Límite de disco pendiente
+
+Sigue pendiente imponer una **cuota de disco para resultados, stdout y stderr**.
+Los límites de memoria, CPU, procesos, tiempo y el tamaño de `/tmp` del contenedor
+no fijan un máximo de bytes para esas salidas en el anfitrión. Esta corrección
+no incorpora esa cuota.
 
 ## Fuera de esta primera PR
 

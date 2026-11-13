@@ -41,9 +41,12 @@ try:
     memory = (group / 'memory.max').read_text().strip()
     pids = (group / 'pids.max').read_text().strip()
     swap = (group / 'memory.swap.max').read_text().strip()
+    quota, period = (group / 'cpu.max').read_text().split()
     assert memory != 'max' and 0 < int(memory) <= 536870912, 'memory.max no aplicado'
     assert pids != 'max' and 0 < int(pids) <= 128, 'pids.max no aplicado'
     assert swap == '0', 'swap no limitado'
+    assert quota != 'max', 'cpu.max sin cuota finita'
+    assert 0 < int(quota) <= int(period), 'cpu.max debe limitar a una CPU como máximo'
 except BaseException as exc:
     print('Aislamiento no disponible: ' + str(exc), file=sys.stderr, flush=True)
     sys.exit(125)
@@ -86,7 +89,8 @@ def require_runtime():
 
 
 def container_command(name, command, workspace, mounts):
-    args = ["podman", "--remote=false", "run", "--name", name, "--pull=never",
+    args = ["podman", "--remote=false", "--default-mounts-file=/dev/null",
+            "run", "--name", name, "--pull=never",
             "--network=none", "--userns=keep-id", "--user", f"{os.getuid()}:{os.getgid()}",
             "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only",
             "--read-only-tmpfs=false", "--tmpfs=/tmp:rw,nosuid,nodev,size=128m,mode=1777",
