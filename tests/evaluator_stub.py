@@ -18,11 +18,11 @@ def run_isolated(command, workspace, log, timeout, *, materials, runner):
     logical = list(command)
     result = runner([sys.executable, *command[1:]], workspace, log, timeout, env_policy='evaluation')
     result['comando'] = logical
-    result['aislamiento'] = {'version': 1, 'runtime': 'podman-rootless', 'imagen': IMAGE,
-        'contenedor': 'cro-eval-simulado', 'limpieza_confirmada': True, 'salida_temporal': '/tmp/salida-simulada',
+    result['aislamiento'] = {'version': 2, 'runtime': 'podman-rootless', 'imagen': IMAGE,
+        'contenedor': 'cro-eval-simulado', 'limpieza_confirmada': True, 'volumen_resultados':'cro-eval-simulado-results', 'limites_salida':normalize_limits(),
         'comando_runtime': container_command('cro-eval-simulado', logical, workspace,
-            [(workspace, workspace, False), *((p, p, False) for p in materials),
-             (Path('/tmp/salida-simulada'), log, True)])}
+            [(workspace, workspace, False), *((p, p, False) for p in materials)],
+            result_volume='cro-eval-simulado-results', result_target=log)}
     if len(command) > 2 and command[2].endswith('project_test_inventory.py'):
         try:
             report = json.loads((log / 'stdout.txt').read_text())

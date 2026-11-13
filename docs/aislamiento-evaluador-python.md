@@ -79,10 +79,12 @@ invoca Python del candidato en el anfitrión como alternativa.
 - Solo se montan la copia de proyecto, el runner congelado cuando procede y las
   autoridades de prueba congeladas, todos de solo lectura. Se conservan las
   rutas absolutas para no cambiar los contratos de pruebas ni la procedencia.
-- La salida tiene un montaje temporal independiente de escritura. El contenedor
-  no ve los registros del controlador. Tras detenerlo se recogen únicamente
+- Los resultados tienen un volumen tmpfs privado de 32 MiB y 1024 inodos; no
+  hay un bind de salida al disco del anfitrión. Stdout y stderr se capturan por
+  pipes, con un máximo de 4 MiB cada uno. El contenedor no ve los registros del
+  controlador. Tras detenerlo se recogen únicamente
   `pruebas.json`, su temporal `pruebas.tmp` y `consultas/`, rechazando enlaces y
-  archivos especiales. Stdout y stderr los captura el anfitrión por separado.
+  archivos especiales y con otro presupuesto agregado durante la copia.
 - El HOME del candidato está en `/tmp/home`. El entorno interno es una lista
   cerrada y no recibe credenciales, HOME personal, directorios de configuración,
   repositorios ajenos, sockets de agentes ni sockets Podman/Docker del anfitrión.
@@ -93,7 +95,9 @@ invoca Python del candidato en el anfitrión como alternativa.
 
 Cada ejecución tiene un nombre `cro-eval-<uuid>`. Tras éxito, fallo, timeout o
 interrupción, el controlador ejecuta `podman rm --force --time=0 --ignore` sobre
-ese nombre y comprueba que `container exists` devuelve 1. Si no puede confirmar
+ese nombre y comprueba que `container exists` devuelve 1. Después de recoger
+los resultados, desmonta y elimina el volumen privado y comprueba también su
+ausencia. Si no puede confirmar
 la limpieza, se detiene y conserva el diagnóstico. No usa limpiezas globales
 como `prune`. En un timeout conserva `tiempo_agotado` (código 4), la salida
 parcial y el nombre de ejecución. Una terminación no capturable del controlador
@@ -102,8 +106,9 @@ los nombres registrados permiten identificar esas ejecuciones.
 
 Se mantienen las identidades de pruebas, recuentos, clasificación, informes,
 hashes y sellos de integridad del controlador. `resultado.json` añade la imagen,
-el nombre del contenedor, el comando de runtime, el origen temporal de salida y
-la confirmación de limpieza. La validación comprueba además que los controles y
+el nombre del contenedor, el comando de runtime, la identidad y cuotas del
+volumen, los bytes capturados y la confirmación de limpieza de ambos recursos.
+La evidencia de aislamiento usa ahora versión 2. La validación comprueba además que los controles y
 montajes registrados son los esperados. Los registros anteriores sin esa
 procedencia no acreditan aislamiento y no se convierten retroactivamente.
 `lista_para_revision_humana` sigue siendo una propuesta: no hay incorporación
@@ -128,12 +133,14 @@ marcador de ejecución en el anfitrión y una importación hostil durante el
 inventario. En ambos puntos el controlador se detiene antes de ejecutar el
 proyecto cuando no puede aplicar el aislamiento.
 
-Las cinco integraciones opt-in usan Podman real, sin sustituirlo: recorrido
+Las diez integraciones opt-in usan Podman real, sin sustituirlo: recorrido
 completo de un candidato válido con agentes sintéticos; señuelo fuera de
 montajes y destino TCP loopback controlado con datos sintéticos; timeout con
 hijo y comprobación de ausencia del contenedor y del proceso; inventario con
 importación que intentaría escribir fuera de los montajes; HOME temporal con
-un montaje automático sintético que el evaluador debe bloquear. Cuando se habilitan,
+un montaje automático sintético que el evaluador debe bloquear; excesos separados
+de resultados, stdout y stderr; exceso agregado entre varios archivos; e informe
+normal con cuotas pequeñas. Cuando se habilitan,
 un runtime roto produce **fallos**, no skips silenciosos.
 
 ### Antecedente: sesión inicial del 11 de noviembre de 2026
@@ -345,12 +352,136 @@ El commit posterior de cierre añade únicamente estos resultados a la
 documentación; no cambia los fuentes ni las pruebas verificadas. La rama queda
 local, sin publicación ni apertura de PR.
 
-### Límite de disco pendiente
+### Antecedente: límite de disco pendiente en c25ea65
 
-Sigue pendiente imponer una **cuota de disco para resultados, stdout y stderr**.
+En `c25ea65` seguía pendiente imponer una cuota para resultados, stdout y stderr.
 Los límites de memoria, CPU, procesos, tiempo y el tamaño de `/tmp` del contenedor
-no fijan un máximo de bytes para esas salidas en el anfitrión. Esta corrección
-no incorpora esa cuota.
+no fijaban un máximo para esas salidas. La ampliación siguiente sustituye esa
+limitación conocida por los controles durante la escritura que se describen abajo.
+
+
+## Ampliación local: salidas acotadas durante la escritura
+
+Se partió del worktree limpio y del SHA publicado
+`c25ea655bd18595fbc5fed7079553c34586f591e`. Esta ampliación se prepara solo en
+local, sin subir commits ni cambiar el estado de borrador de la PR #27.
+
+### Presupuestos y justificación
+
+| Salida por evaluación | Límite predeterminado | Motivo |
+| --- | --- | --- |
+| Resultados del proyecto | 32 MiB de bloques tmpfs y 1024 inodos | Margen para el JSON de métodos/subtests y las consultas; impide crecer indefinidamente creando muchos archivos |
+| Copia de resultados al registro | 32 MiB de datos regulares agregados | Impide amplificar archivos sparse o hardlinks al copiarlos al disco |
+| Stdout | 4 MiB de bytes capturados | Margen para el inventario JSON y salidas normales, sin admitir un stream ilimitado |
+| Stderr | 4 MiB de bytes capturados, incluidos los diagnósticos añadidos | Margen para unittest verboso y tracebacks; ningún diagnóstico permite saltarse el tope |
+
+Son límites del controlador por etapa (inventario o suite), no un presupuesto
+configurable por el candidato, variables de entorno o la tarea. Las pruebas
+usan explícitamente presupuestos menores: 16 KiB para resultados y 1 KiB por
+stream; el caso válido pequeño permite 4 KiB de stderr. Los tamaños de los
+informes normales no cambian y sus bytes se copian sin reescritura.
+
+### Aplicación efectiva
+
+Antes de lanzar el candidato se crea un volumen local Podman con
+`type=tmpfs`, `device=tmpfs` y opciones `size`, `nr_inodes`, `nodev` y `nosuid`.
+Una referencia explícita mediante `podman unshare podman volume mount` mantiene
+ese tmpfs disponible hasta terminar la recogida. Un helper de confianza, solo
+con biblioteca estándar y Python `-I`, verifica el montaje en `mountinfo` y las
+capacidades efectivas de bloques/inodos con `statvfs`. Si el runtime no puede
+aplicarlas, se detiene la evaluación. No hay alternativa a un directorio de
+salida sin cuota en el disco. Los montajes automáticos siguen bloqueados.
+
+El **kernel limita cada asignación durante la escritura** en ese filesystem;
+no se confía en medirlo después de ejecutar. Un monitor de confianza consulta
+saturación y tamaño lógico cada 20 ms. Al detectar saturación, exceso lógico o
+la pérdida del monitor, detiene la ejecución. La comprobación final del volumen
+cierra la carrera entre el último sondeo y la salida del proceso. El monitor no
+importa código del proyecto y recorre metadatos mediante descriptores, sin
+seguir enlaces del candidato hacia el filesystem anfitrión.
+
+Para stdout y stderr, el proceso Podman escribe en **pipes**, no directamente
+en archivos del registro. El capturador solo escribe el prefijo que cabe en el
+presupuesto de cada canal. El primer byte adicional provoca `limite_salida`,
+la muerte del cliente y la limpieza forzada del contenedor y sus descendientes.
+El exceso puede quedar en el pipe o en un bloque pequeño de memoria del
+capturador; nunca se escribe en los archivos más allá de la cuota. Se mantiene
+`--log-driver=none` para evitar otra copia sin tope del stream en los logs de Podman.
+
+Después de detener y retirar el contenedor, la copia de resultados valida las
+rutas permitidas, rechaza enlaces y archivos especiales, y descuenta cada bloque
+escrito de un presupuesto agregado. El volumen se desmonta, elimina y verifica
+por nombre, incluso tras errores. `limpieza_confirmada` exige tanto contenedor
+como volumen retirados. No se usa `prune` ni se modifica el HOME personal.
+
+### Diagnósticos e informes parciales
+
+El registro conserva `estado=limite_salida`, `salida_excedida` (resultados,
+stdout o stderr), cuotas, uso final del volumen y bytes capturados. El
+controlador se detiene con código 3 y estado global `fallo_tecnico` (compatible
+con los lectores existentes), antes de validar o clasificar las pruebas;
+un `pruebas.json` incompleto no puede autorizar revisión. En una ejecución
+limitada no se recogen resultados y se eliminan los nombres de informe parcial
+del registro, aunque el candidato hubiera escrito previamente un JSON completo.
+
+Los timeouts siguen siendo `tiempo_agotado`, con código 4, el nombre de ejecución
+y los canales parciales. Si stderr ya está lleno, el diagnóstico completo se
+conserva en `resultado.json`; no se añade texto por encima de su límite. Los
+fallos de limpieza impiden acreditar el resultado y conservan los identificadores
+para una retirada administrativa.
+
+### Garantías y límites de la garantía
+
+El presupuesto de resultados limita bloques **retenidos simultáneamente**, no
+la suma histórica de todos los bytes escritos y después borrados o sobrescritos.
+La detección y la orden de detener por saturación son asíncronas; el límite del
+filesystem sigue actuando entre sondeos. No se promete auditar cada syscall
+rechazada si el programa captura ENOSPC y borra o reduce el archivo antes del
+sondeo. Eso no permite superar el espacio del tmpfs ni el presupuesto de copia.
+
+Tmpfs puede usar swap del anfitrión según el kernel y su política: no se afirma
+que permanezca exclusivamente en RAM. Aun en ese caso, sus bloques de datos
+están acotados a 32 MiB, y sus metadatos por el límite de inodos. Los 32 MiB de
+resultados copiados y los 8 MiB de canales son máximos de **datos**, no una cuota
+exacta del espacio de filesystem que consumen metadatos, bloques redondeados y
+los registros de control, cuyo tamaño depende también del proyecto de referencia. No se reserva espacio libre global ni se
+limita la suma de ejecuciones concurrentes o registros antiguos. Otros procesos
+o un disco ya casi lleno pueden seguir ocasionando ENOSPC. Una terminación
+SIGKILL/apagado puede exigir retirar por nombre el contenedor y su volumen.
+
+### Validación de la ampliación en Ubuntu
+
+En Ubuntu 24.04.5 con Podman rootless 4.9.3, la sonda y las **10 integraciones
+reales pasaron en 32.932 s**. Se mantuvieron los cinco casos anteriores y se
+comprobaron por separado exceso de resultados, stdout y stderr, exceso entre
+varios archivos y un informe habitual con cuotas pequeñas. Cada exceso verifica
+los bytes acotados, el diagnóstico correcto, ausencia de informe acreditable y
+retirada de contenedor, volumen y proceso descendiente. El caso válido vuelve a
+pasar la clasificación de `flow_counts()` con el formato normal del runner.
+
+También pasaron las 16 unitarias del aislamiento, 7 pruebas específicas del
+capturador/copia y los fixtures existentes de orquestación y CSV. Las unitarias
+usan datos sintéticos y sustituciones declaradas; las 10 integraciones usan
+contenedores y volúmenes reales. La imagen ya estaba disponible; no se descargó.
+
+La pasada final de `env -u CRO_REAL_PODMAN python3 -B -m unittest discover -s tests -v`
+terminó con **834 pruebas: 824 correctas y 10 integraciones opt-in omitidas**, sin
+fallos ni errores, en **296.475 s**. Incluye las 23 unitarias específicas (16 del
+aislamiento y 7 del capturador/copia). Las diez omisiones de esta pasada son las
+integraciones reales verificadas por separado; no se presentan como prueba
+simulada de las cuotas del kernel.
+
+`python3 -B python_evaluator.py check` terminó correctamente, con limpieza
+confirmada. `git diff --check` pasó. La comprobación posterior no encontró
+contenedores `cro-eval-*`, volúmenes de resultados ni monitores de cuota activos.
+El checkout original y sus cuatro archivos locales permanecen fuera de esta
+ampliación. La PR #27 sigue en borrador y con el SHA publicado `c25ea65`.
+
+
+La sintaxis inicial `--mount ... volume-nocopy` no era admitida por Podman 4.9.3;
+se corrigió a `--volume volumen:destino:nocopy`. Los intentos rechazados se
+limpiaron sin ejecutar candidatos ni sustituir la cuota por almacenamiento sin
+límite. No se relajaron seccomp, AppArmor, namespaces ni las demás protecciones.
 
 ## Fuera de esta primera PR
 

@@ -27,6 +27,12 @@ class PythonEvaluatorTests(unittest.TestCase):
         self.project.mkdir()
         self.log = self.root / 'log'
         self.marker = self.root / 'HOST_EXECUTED'
+        for name, value in (('prepare_result_volume', '/tmp/volumen-simulado'),
+                            ('result_volume_usage', {'excedido':False}),
+                            ('collect_result_volume', None), ('cleanup_result_volume', None)):
+            mocked = patch.object(sandbox, name, return_value=value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
         self.command = [sys.executable, '-B', '-c',
                         f'from pathlib import Path; Path({str(self.marker)!r}).touch()']
 
@@ -106,12 +112,12 @@ class PythonEvaluatorTests(unittest.TestCase):
 
     def test_validacion_rechaza_montajes_o_controles_alterados(self):
         output = self.root/'output'
-        stamp = {'version':1, 'runtime':'podman-rootless', 'imagen':sandbox.IMAGE,
+        stamp = {'version':2, 'runtime':'podman-rootless', 'imagen':sandbox.IMAGE,
                  'contenedor':'cro-eval-unit', 'limpieza_confirmada':True,
-                 'salida_temporal':str(output)}
-        mounts = [(self.project, self.project, False), (output, self.log, True)]
+                 'volumen_resultados':'cro-eval-unit-results', 'limites_salida':sandbox.normalize_limits()}
+        mounts = [(self.project, self.project, False)]
         stamp['comando_runtime'] = sandbox.container_command('cro-eval-unit', self.command,
-                                                             self.project, mounts)
+                                                             self.project, mounts, result_volume=stamp['volumen_resultados'], result_target=self.log)
         result = {'comando':self.command, 'directorio_trabajo':str(self.project), 'aislamiento':stamp}
         sandbox.validate_isolation(result, materials=(), log=self.log)
         original = stamp['comando_runtime'].copy()

@@ -8,14 +8,15 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from uuid import uuid4
 
 from process_environment import process_environment
 from repair_case import ProcessInterrupted, ProcessRecordError, timestamp, write_json
+from bounded_output import output_limits as normalize_limits, collect_output, append_diagnostic
 
 # Docker Official Image python:3.12.16-bookworm; incluye Git (índice OCI multiarch).
 IMAGE = "docker.io/library/python@sha256:4209fae09a3e20afd863e528bfddc235da5fd5977983e1996cd54cc9a72e6267"
@@ -88,7 +89,7 @@ def require_runtime():
         raise RuntimeError("No se pudo comprobar la imagen local: " + available.stderr.strip())
 
 
-def container_command(name, command, workspace, mounts):
+def container_command(name, command, workspace, mounts, *, result_volume=None, result_target=None):
     args = ["podman", "--remote=false", "--default-mounts-file=/dev/null",
             "run", "--name", name, "--pull=never",
             "--network=none", "--userns=keep-id", "--user", f"{os.getuid()}:{os.getgid()}",
@@ -103,6 +104,12 @@ def container_command(name, command, workspace, mounts):
         if any(',' in str(p) for p in (source, target)):
             raise ValueError("Coma no admitida en rutas de montaje")
         args += ["--mount", f"type=bind,src={source},dst={target},ro={'false' if writable else 'true'}"]
+    if result_volume is not None:
+        if ',' in str(result_target):
+            raise ValueError('Coma no admitida en el montaje de resultados')
+        if ':' in str(result_target):
+            raise ValueError('Dos puntos no admitidos en el montaje de resultados')
+        args += ['--volume', f'{result_volume}:{result_target}:nocopy']
     return [*args, IMAGE, "-I", "-B", "-c", BOOTSTRAP, json.dumps(command)]
 
 
@@ -113,100 +120,143 @@ def cleanup(name):
         raise RuntimeError("No se pudo confirmar la limpieza de " + name + ": " + removed.stderr.strip())
 
 
-def collect_output(source, destination):
-    # El proyecto puede escribir salida hostil: nunca seguir enlaces ni especiales.
-    for path in sorted(source.rglob('*')):
-        if path.relative_to(source).parts[0] not in ("pruebas.json", "pruebas.tmp", "consultas"):
-            raise ValueError("Salida no declarada del evaluador: " + str(path))
-        if path.is_symlink() or not (path.is_file() or path.is_dir()):
-            raise ValueError("Salida del evaluador no regular: " + str(path))
-        target = destination / path.relative_to(source)
-        if path.is_dir():
-            target.mkdir(exist_ok=True)
-        else:
-            shutil.copyfile(path, target)
+def volume_call(arguments):
+    result = runtime_call(arguments)
+    if result.returncode:
+        raise RuntimeError('Cuota de resultados no disponible: ' + result.stderr.strip()[:1024])
+    return result.stdout.strip()
 
 
-def run_isolated(command, workspace, log, timeout, *, materials, runner):
-    """Registrar el comando lógico, el comando Podman y la limpieza confirmada."""
+def prepare_result_volume(name, limits):
+    volume_call(['volume', 'create', '--opt', 'device=tmpfs', '--opt', 'type=tmpfs',
+                 '--opt', f"o=size={limits['resultados']},nr_inodes={limits['inodos']},nodev,nosuid,mode=0700", name])
+    # Mantener una referencia explícita: el tmpfs debe sobrevivir al contenedor
+    # hasta terminar su recogida. Ninguna ruta de disco se ofrece de alternativa.
+    path = volume_call(['unshare', 'podman', 'volume', 'mount', name])
+    usage = result_volume_usage(path, limits)
+    if usage['excedido']:
+        raise RuntimeError('Volumen de resultados ya saturado')
+    return path
+
+
+def result_helper(action, path, limits, *extra):
+    return ['unshare', str(Path(sys.executable).resolve()), '-I', '-B',
+            str(Path(__file__).with_name('bounded_output.py')), action, path,
+            json.dumps(limits, sort_keys=True), *map(str, extra)]
+
+
+def result_volume_usage(path, limits):
+    return json.loads(volume_call(result_helper('inspect', path, limits)))
+
+
+def collect_result_volume(path, log, limits):
+    volume_call(result_helper('collect', path, limits, log))
+
+
+def cleanup_result_volume(name):
+    volume_call(['unshare', 'podman', 'volume', 'unmount', name])
+    volume_call(['volume', 'rm', name])
+    exists = runtime_call(['volume', 'exists', name])
+    if exists.returncode != 1:
+        raise RuntimeError('No se pudo confirmar la limpieza del volumen ' + name)
+
+
+def run_isolated(command, workspace, log, timeout, *, materials, runner, output_limits=None):
+    """Cuotas durante la escritura; no hay bind de salida al disco del anfitrión."""
+    limits = normalize_limits(output_limits)
     log.mkdir(exist_ok=True)
     started = time.monotonic()
-    name = "cro-eval-" + uuid4().hex
-    result = {"comando": command, "directorio_trabajo": str(workspace),
-              "inicio_utc": timestamp(), "limite_segundos": timeout, "politica_entorno": "evaluation",
-              "estado": "error_inicio", "codigo_salida": None, "error": None}
-    isolation = result["aislamiento"] = {"version": 1, "runtime": "podman-rootless", "imagen": IMAGE,
-                                         "contenedor": name, "limpieza_confirmada": False}
+    name = 'cro-eval-' + uuid4().hex
+    volume = name + '-results'
+    result = {'comando':command, 'directorio_trabajo':str(workspace),
+              'inicio_utc':timestamp(), 'limite_segundos':timeout, 'politica_entorno':'evaluation',
+              'estado':'error_inicio', 'codigo_salida':None, 'error':None}
+    isolation = result['aislamiento'] = {'version':2, 'runtime':'podman-rootless', 'imagen':IMAGE,
+        'contenedor':name, 'volumen_resultados':volume, 'limites_salida':limits, 'limpieza_confirmada':False}
     pending = None
-    attempted = False
+    attempted = volume_attempted = False
     try:
         require_runtime()
-        with tempfile.TemporaryDirectory(prefix="salida-evaluador-") as temporary:
-            output = Path(temporary)
-            isolation["salida_temporal"] = str(output)
-            mounts = [(Path(workspace).resolve(), Path(workspace).absolute(), False),
-                      *((Path(p).resolve(), Path(p).absolute(), False) for p in materials),
-                      (output, log.absolute(), True)]
-            actual = container_command(name, command, workspace, mounts)
-            isolation["comando_runtime"] = actual
-            attempted = True
-            try:
-                executed = runner(actual, workspace, log, timeout, env_policy="podman")
-            except (ProcessInterrupted, ProcessRecordError) as exc:
-                executed = exc.result
-                pending = exc
-            result.update({k: v for k, v in executed.items()
-                           if k not in ("comando", "directorio_trabajo", "politica_entorno", "inicio_utc")})
-            if result["codigo_salida"] in (125, 126, 127):
-                result.update(estado="error_inicio", error="El contenedor no pudo iniciar con el aislamiento exigido; ver stderr.txt")
-            if result["estado"] == "tiempo_agotado":
-                result["error"] = f"La evaluación aislada agotó su límite de {timeout} segundos; contenedor {name}"
-                with (log / "stderr.txt").open("a") as stream:
-                    stream.write(result["error"] + "\n")
-            # Matar el contenedor también si el cliente Podman murió o fue interrumpido.
-            cleanup(name)
-            isolation["limpieza_confirmada"] = True
-            attempted = False
-            try:
-                collect_output(output, log)
-            except ValueError as exc:
-                if result["estado"] != "tiempo_agotado":
-                    raise
-                result["error_salida"] = str(exc)
+        volume_attempted = True
+        path = prepare_result_volume(volume, limits)
+        mounts = [(Path(workspace).resolve(), Path(workspace).absolute(), False),
+                  *((Path(p).resolve(), Path(p).absolute(), False) for p in materials)]
+        actual = container_command(name, command, workspace, mounts,
+                                   result_volume=volume, result_target=log.absolute())
+        isolation['comando_runtime'] = actual
+        attempted = True
+        try:
+            executed = runner(actual, workspace, log, timeout, env_policy='podman',
+                output_limits=limits, monitor_command=['podman', '--remote=false',
+                    *result_helper('monitor', path, limits)])
+        except (ProcessInterrupted, ProcessRecordError) as exc:
+            executed, pending = exc.result, exc
+        result.update({k:v for k,v in executed.items()
+                       if k not in ('comando','directorio_trabajo','politica_entorno','inicio_utc')})
+        if result['estado'] == 'finalizada' and result['codigo_salida'] in (125,126,127):
+            result.update(estado='error_inicio', error='El contenedor no pudo iniciar con el aislamiento exigido; ver stderr.txt')
+        if result['estado'] == 'tiempo_agotado':
+            result['error'] = f'La evaluación aislada agotó su límite de {timeout} segundos; contenedor {name}'
+        cleanup(name)
+        attempted = False
+        # El kernel ya limitó cada escritura en el tmpfs; esta comprobación
+        # final cierra la carrera entre el último sondeo y la salida del hijo.
+        usage = result_volume_usage(path, limits)
+        result['uso_resultados'] = usage
+        if usage['excedido'] and result['estado'] != 'tiempo_agotado':
+            result.update(estado='limite_salida', salida_excedida='resultados',
+                          error='Límite de resultados alcanzado')
+        if result['estado'] == 'finalizada':
+            collect_result_volume(path, log, limits)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-        result.update(estado="error_inicio", error="Aislamiento no disponible: " + str(exc))
-        with (log / "stderr.txt").open("a") as stream:
-            stream.write(result["error"] + "\n")
+        result.update(estado='error_inicio', error='Aislamiento no disponible: ' + str(exc)[:1024])
     finally:
+        container_clean = not attempted
         if attempted:
             try:
                 cleanup(name)
-                isolation["limpieza_confirmada"] = True
+                container_clean = True
             except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-                result.update(estado="error_inicio", error="Limpieza del contenedor fallida: " + str(exc))
-        for channel in ("stdout.txt", "stderr.txt"):
-            (log / channel).touch(exist_ok=True)
-        result.update(fin_utc=timestamp(), duracion_segundos=time.monotonic() - started)
-        write_json(log / "resultado.json", result)
+                result.update(estado='error_inicio', error='Limpieza del contenedor fallida: ' + str(exc)[:1024])
+        volume_clean = not volume_attempted
+        if volume_attempted and container_clean:
+            try:
+                cleanup_result_volume(volume)
+                volume_clean = True
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                result.update(estado='error_inicio', error='Limpieza del volumen fallida: ' + str(exc)[:1024])
+        isolation['limpieza_confirmada'] = container_clean and volume_clean
+        for channel in ('stdout.txt','stderr.txt'):
+            (log/channel).touch(exist_ok=True)
+        if result['error']:
+            append_diagnostic(log, result['error'], limits)
+        # Un informe parcial nunca se conserva como candidato a validación.
+        if result['estado'] != 'finalizada':
+            for name_report in ('pruebas.json', 'pruebas.tmp'):
+                (log/name_report).unlink(missing_ok=True)
+        result.update(fin_utc=timestamp(), duracion_segundos=time.monotonic()-started)
+        write_json(log/'resultado.json', result)
     if pending is not None:
         pending.result = result
         raise pending
     return result
 
 
-def validate_isolation(process, *, materials, log):
+def validate_isolation(process, *, materials, log, output_limits=None):
     from case_evidence import require
     stamp = process["aislamiento"]
-    require(stamp["version"] == 1 and stamp["runtime"] == "podman-rootless"
+    require(stamp["version"] == 2 and stamp["runtime"] == "podman-rootless"
             and stamp["imagen"] == IMAGE and stamp["limpieza_confirmada"] is True,
             "Evidencia de aislamiento inválida")
     workspace = Path(process["directorio_trabajo"])
-    output = Path(stamp["salida_temporal"])
-    require(output.is_absolute() and stamp["contenedor"].startswith("cro-eval-"),
+    limits = normalize_limits(output_limits)
+    require(stamp["limites_salida"] == limits
+            and stamp["volumen_resultados"] == stamp["contenedor"] + "-results"
+            and stamp["contenedor"].startswith("cro-eval-"),
             "Identidad del contenedor inválida")
-    mounts = [(workspace, workspace, False), *((Path(p), Path(p), False) for p in materials),
-              (output, Path(log), True)]
-    expected = container_command(stamp["contenedor"], process["comando"], workspace, mounts)
+    mounts = [(workspace, workspace, False), *((Path(p), Path(p), False) for p in materials)]
+    expected = container_command(stamp["contenedor"], process["comando"], workspace, mounts,
+        result_volume=stamp["volumen_resultados"], result_target=Path(log))
     # La identidad numérica puede variar al revisar en otra cuenta.
     actual = stamp["comando_runtime"]
     index = expected.index("--user") + 1
@@ -221,6 +271,8 @@ def validate_isolation(process, *, materials, log):
 
 def check_isolated_process(process):
     from repair_project import StopProject, check_process
+    if process["estado"] == "limite_salida":
+        raise StopProject(3, "fallo_tecnico", process["error"])
     if process["estado"] == "error_inicio" and process.get("error"):
         raise StopProject(3, "fallo_tecnico", process["error"])
     check_process(process)

@@ -26,7 +26,7 @@ SUITES = {"aceptacion": ACCEPTANCE, "regresion": None,
 LIMITS = {"desarrollador": 300, "revisor": 180, "consulta_cli": 10,
           "aceptacion": 60, "regresion": 180, "hallazgos": 60, "anidamiento": 60}
 SUPPORT = ("repair_case.py", "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py",
-           "python_evaluator.py")
+           "python_evaluator.py", "bounded_output.py")
 CSV_BASE = "4cda45e2ccda3f7091f8ab15e55087516c09bec0"
 CSV_LIMITS = {"desarrollador": 300, "revisor": 300, "consulta_cli": 10,
               "aceptacion": 60, "regresion": 300, "inventario": 30}

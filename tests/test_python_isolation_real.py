@@ -5,6 +5,7 @@ Los agentes son fixtures sintéticos; el inventario/evaluador usa Podman real.
 """
 
 import os
+import json
 from pathlib import Path
 import socket
 import subprocess
@@ -17,10 +18,105 @@ from uuid import uuid4
 import project_flow
 import python_evaluator as sandbox
 from repair_case import run_process
+from repair_project import StopProject
 
 
 @unittest.skipUnless(os.environ.get('CRO_REAL_PODMAN') == '1', 'integración real opt-in: CRO_REAL_PODMAN=1')
 class RealPythonIsolationTests(unittest.TestCase):
+    def check_output_overflow(self, channel, multiple=False):
+        limits = {'resultados':16384, 'stdout':1024, 'stderr':1024, 'inodos':64}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root/'project'
+            project.mkdir()
+            log = root/'log'
+            token = 'cro-output-' + uuid4().hex
+            prefix = f'''import os, sys, time, subprocess
+from pathlib import Path
+subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)', {token!r}])
+Path({str(log/'pruebas.json')!r}).write_text('{{"completo":true}}')
+'''
+            if multiple:
+                code = prefix + f'''
+output = Path({str(log/'consultas')!r})
+output.mkdir()
+try:
+    for index in range(100):
+        (output/str(index)).write_bytes(b'X'*4096)
+except OSError:
+    print('ENOSPC_MULTIPLES', flush=True)
+    time.sleep(120)
+'''
+            elif channel == 'resultados':
+                code = prefix + f'''
+try:
+    with open({str(log/'pruebas.json')!r}, 'wb', buffering=0) as output:
+        while True: output.write(b'X'*4096)
+except OSError:
+    print('ENOSPC_SINTETICO', flush=True)
+    time.sleep(120)
+'''
+            else:
+                fd = 1 if channel == 'stdout' else 2
+                code = prefix + f'while True: os.write({fd}, b"X"*65536)\n'
+            result = sandbox.run_isolated([sandbox.PYTHON, '-B', '-c', code], project, log, 15,
+                                           materials=(), runner=run_process, output_limits=limits)
+            self.assertEqual(result['estado'], 'limite_salida', result)
+            self.assertEqual(result['salida_excedida'], channel)
+            self.assertIn(channel, result['error'])
+            self.assertTrue(result['aislamiento']['limpieza_confirmada'])
+            self.assertFalse((log/'pruebas.json').exists())
+            for name in ('stdout','stderr'):
+                self.assertLessEqual((log/(name+'.txt')).stat().st_size, limits[name])
+            self.assertLessEqual(result['uso_resultados']['bytes_asignados'], limits['resultados'])
+            if channel in ('stdout', 'stderr'):
+                self.assertEqual((log/(channel+'.txt')).stat().st_size, limits[channel])
+            self.assertEqual(json.loads((log/'resultado.json').read_text()), result)
+            name = result['aislamiento']['contenedor']
+            self.assertEqual(sandbox.runtime_call(['container','exists', name]).returncode, 1)
+            self.assertEqual(sandbox.runtime_call(['volume','exists', name+'-results']).returncode, 1)
+            self.assertNotIn(token, subprocess.check_output(['ps','-eo','args'], text=True))
+            with self.assertRaisesRegex(StopProject, 'Límite') as stopped:
+                sandbox.check_isolated_process(result)
+            self.assertEqual(stopped.exception.code, 3)
+            self.assertEqual(stopped.exception.state, 'fallo_tecnico')
+
+    def test_6_limite_agregado_de_resultados_durante_escritura(self):
+        self.check_output_overflow('resultados')
+
+    def test_7_limite_stdout_durante_escritura(self):
+        self.check_output_overflow('stdout')
+
+    def test_8_limite_stderr_durante_escritura(self):
+        self.check_output_overflow('stderr')
+
+    def test_9_limite_de_resultados_agregado_entre_archivos(self):
+        self.check_output_overflow('resultados', multiple=True)
+
+    def test_10_informe_habitual_valido_con_cuotas_pequenas(self):
+        limits = {'resultados':16384, 'stdout':1024, 'stderr':4096, 'inodos':64}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project, frozen, log = root/'project', root/'frozen', root/'log'
+            (project/'tests').mkdir(parents=True)
+            (frozen/'autoridades').mkdir(parents=True)
+            (project/'candidate.py').write_text('def value(): return 42\n')
+            (project/'tests/test_ok.py').write_text('import unittest\nimport candidate\n'
+                'class Good(unittest.TestCase):\n    def test_ok(self): self.assertEqual(candidate.value(), 42)\n')
+            (frozen/'project_flow_runner.py').write_bytes(
+                Path(project_flow.__file__).with_name('project_flow_runner.py').read_bytes())
+            command = project_flow.evaluation_command(frozen, project, log, 'regresion')
+            result = sandbox.run_isolated(command, project, log, 15,
+                materials=(frozen/'project_flow_runner.py', frozen/'autoridades'),
+                runner=run_process, output_limits=limits)
+            self.assertEqual((result['estado'], result['codigo_salida']), ('finalizada',0), result)
+            report = (log/'pruebas.json').read_bytes()
+            counts = project_flow.flow_counts(report, ['test_ok.Good.test_ok'], result,
+                                             (log/'stderr.txt').read_text())
+            self.assertEqual(counts['clasificacion'], 'superadas')
+            self.assertTrue(json.loads(report)['completo'])
+            self.assertTrue(result['aislamiento']['limpieza_confirmada'])
+
     def test_1_candidato_valido_completa_orquestacion(self):
         from test_orchestrate_project import ProjectFlowTests
         fixture = ProjectFlowTests()
