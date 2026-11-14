@@ -164,10 +164,22 @@ son fixtures sintéticos.
 Registra versiones del sistema, Python y paquetes, UID/GID, rangos subordinados,
 helpers de uidmap, cgroups, delegación systemd y estado de AppArmor. Falla si no
 hay rangos de al menos 65536 UID/GID, sesión de usuario operativa, cgroups v2 o
-controladores CPU/memoria/procesos. Comprueba además rootless, seccomp y AppArmor
-en `podman info`. No relaja perfiles, sysctls, namespaces ni cuotas. La sonda
+controladores CPU/memoria/procesos. Comprueba rootless y seccomp en
+`podman info`, y exige que el módulo AppArmor del anfitrión esté activo. Registra
+su estado con `aa-status` y el sysctl de restricción de namespaces, sin cambiarlo.
+No relaja perfiles, sysctls, namespaces ni cuotas. La sonda
 `check` verifica los límites efectivos dentro del contenedor antes de ejecutar
 los candidatos; estos conservan el bloqueo de red y de descargas.
+
+Podman 4.9.3 no aplica perfiles AppArmor de contenedor en rootless y puede
+informar `apparmorEnabled=false` aunque el módulo del anfitrión esté activo.
+Este check conserva AppArmor del sistema; no acredita un perfil AppArmor
+adicional dentro del contenedor. La distinción está en el
+[código de esa versión](https://github.com/containers/podman/blob/v4.9.3/vendor/github.com/containers/common/pkg/apparmor/apparmor_linux.go).
+La primera ejecución de esta PR, [43615504294](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/actions/runs/43615504294),
+falló antes de preparar la imagen por exigir incorrectamente ese booleano de
+Podman. `aa-status` confirmó el módulo activo. La comprobación corregida exige
+el módulo del anfitrión sin cambiar la configuración del runtime.
 
 El orden reproducible, una vez preparada esa sesión rootless en Ubuntu, es:
 
