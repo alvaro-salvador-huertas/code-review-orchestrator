@@ -186,6 +186,111 @@ class ProjectReviewTests(unittest.TestCase):
         write_json(self.ree / 'evidencia_sha256.json', {name: tree_state(self.ree / name)
                    for name in ('aceptacion', 'comprobaciones', 'entrega', 'regresion_historica')})
 
+    def isolated_development(self):
+        """Convertir solo los metadatos del fixture; no representa Podman real."""
+        import python_evaluator as sandbox
+        d = self.read(self.dev/'resultado.json')
+        d['version_evaluacion'] = 2
+        d['procedencia']['version_evaluacion'] = 2
+        for phase in ('inicial', 'posterior'):
+            for kind in ('aceptacion', 'regresion'):
+                item = d[phase][kind]
+                item['version'] = 2
+                process = item['proceso']
+                process['comando'][0] = sandbox.PYTHON
+                process['politica_entorno'] = 'evaluation'
+                workspace = Path(process['directorio_trabajo'])
+                runner = self.dev/'referencia/project_test_runner.py'
+                materials = (runner,)
+                if kind == 'aceptacion': materials += (self.dev/'referencia/evaluar.py',)
+                name = 'cro-eval-simulado'
+                process['aislamiento'] = {'version':2, 'runtime':'podman-rootless',
+                    'imagen':sandbox.IMAGE, 'contenedor':name, 'volumen_resultados':name+'-results',
+                    'limites_salida':sandbox.normalize_limits(), 'limpieza_confirmada':True,
+                    'comando_runtime':sandbox.container_command(name, process['comando'], workspace,
+                        [(workspace, workspace, False), *((p,p,False) for p in materials)],
+                        result_volume=name+'-results', result_target=self.dev/phase/kind)}
+        self.save_development(d)
+        return d
+
+    def save_development(self, d):
+        # Reseñar las alteraciones deliberadas: un rechazo debe proceder del
+        # validador semántico y no solo de un inventario dejado desactualizado.
+        write_json(self.dev/'referencia/procedencia.json', d['procedencia'])
+        write_json(self.ree/'referencia/procedencia_original.json', d['procedencia'])
+        for phase in ('inicial', 'posterior'):
+            for kind in ('aceptacion', 'regresion'):
+                item = d[phase][kind]
+                write_json(self.dev/phase/kind/'evaluacion.json', item)
+                write_json(self.dev/phase/kind/'resultado.json', item['proceso'])
+        d['referencia_sha256'] = tree_state(self.dev/'referencia')
+        d['evidencia_sha256'] = {n:tree_state(self.dev/n) for n in ('inicial','agente','entrega')}
+        write_json(self.dev/'resultado.json', d)
+        shutil.rmtree(self.ree/'regresion_historica')
+        shutil.copytree(self.dev/'posterior/regresion', self.ree/'regresion_historica')
+        p = self.read(self.ree/'procedencia.json')
+        p['sha256']['resultado_origen'] = digest((self.dev/'resultado.json').read_bytes())
+        p['regresion_reutilizada']['evaluacion_historica'] = d['posterior']['regresion']
+        write_json(self.ree/'procedencia.json', p)
+        r = self.read(self.ree/'resultado.json')
+        r['regresion_reutilizada'] = p['regresion_reutilizada']
+        write_json(self.ree/'resultado.json', r)
+        self.seal()
+
+    def test_registro_historico_sigue_legible_sin_atribuir_aislamiento(self):
+        import python_evaluator as sandbox
+        before = tree_state(self.dev)
+        with patch.object(sandbox, 'runtime_call', side_effect=AssertionError('No ejecutar Podman al leer')):
+            materials, authorization, records = controller.validate_evidence(self.dev, self.ree, self.root)
+        self.assertIn('inspect_run.py', materials)
+        self.assertEqual(authorization['sha256']['candidato'], digest(CANDIDATE))
+        self.assertEqual(tree_state(self.dev), before)
+        self.assertNotIn('version_evaluacion', self.read(self.dev/'resultado.json'))
+        self.assertNotIn('aislamiento', self.read(self.dev/'inicial/aceptacion/resultado.json'))
+        self.assertFalse(self.calls.exists())
+
+    def test_registro_nuevo_valido_conserva_compatibilidad_con_reevaluacion_historica(self):
+        self.isolated_development()
+        materials, authorization, records = controller.validate_evidence(self.dev, self.ree, self.root)
+        self.assertEqual(materials['inspect_run.py'], CANDIDATE)
+        self.assertEqual(authorization['sha256']['candidato'], digest(CANDIDATE))
+        self.assertFalse(self.calls.exists())
+
+    def test_registro_nuevo_sin_aislamiento_o_con_montaje_alterado_no_acredita(self):
+        d = self.isolated_development()
+        for phase in ('inicial', 'posterior'):
+            for kind in ('aceptacion', 'regresion'):
+                for fault in ('ausente', 'montaje', 'limpieza'):
+                    altered = copy.deepcopy(d)
+                    process = altered[phase][kind]['proceso']
+                    if fault == 'ausente': process.pop('aislamiento')
+                    elif fault == 'montaje': process['aislamiento']['comando_runtime'].remove('--network=none')
+                    else: process['aislamiento']['limpieza_confirmada'] = False
+                    self.save_development(altered)
+                    with self.subTest(phase=phase, kind=kind, fault=fault), self.assertRaises(ValueError):
+                        controller.validate_evidence(self.dev, self.ree, self.root)
+        self.assertFalse(self.calls.exists())
+
+    def test_version_nueva_no_admite_descenso_parcial_a_historica(self):
+        d = self.isolated_development()
+        for fault in ('resumen', 'procedencia', 'ambas', 'desconocida', 'booleano'):
+            altered = copy.deepcopy(d)
+            if fault in ('resumen', 'ambas'): altered.pop('version_evaluacion')
+            if fault in ('procedencia', 'ambas'): altered['procedencia'].pop('version_evaluacion')
+            if fault == 'desconocida': altered['version_evaluacion'] = 3
+            if fault == 'booleano': altered['version_evaluacion'] = True
+            self.save_development(altered)
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                controller.validate_evidence(self.dev, self.ree, self.root)
+        self.assertFalse(self.calls.exists())
+
+    def test_identidad_de_candidato_sigue_exigida_en_registro_nuevo(self):
+        d = self.isolated_development()
+        d['candidato_sha256'] = digest(ORIGINAL)
+        self.save_development(d)
+        with self.assertRaisesRegex(ValueError, 'Candidato mezclado'):
+            controller.validate_evidence(self.dev, self.ree, self.root)
+
     def configure(self, **options):
         self.settings.write_text(json.dumps(options))
         self.fake.write_text(f'''#!{sys.executable}

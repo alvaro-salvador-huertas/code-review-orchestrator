@@ -19,9 +19,10 @@ from uuid import uuid4
 from case_evidence import digest, parse_json, read_regular, require, unified_diff
 from repair_case import ProcessInterrupted, timestamp, write_json
 from repair_project import (ACCEPTANCE, CONTRACT, PROJECT, classify_report, cli_progress,
-                            excluded, static_test_ids, tree_state)
+                            excluded, static_test_ids, tree_state, EVALUATION_VERSION)
 from review_case import invoke_reviewer
 from process_environment import process_environment
+from python_evaluator import PYTHON, validate_isolation
 
 
 SPECIFIC = "tests/test_inspect_json_evaluator.py"
@@ -87,7 +88,7 @@ def completed(process):
             "Duración de proceso inválida")
 
 
-def evaluation(record, name, saved, expected, runner, acceptance=None, project=None):
+def evaluation(record, name, saved, expected, runner, acceptance=None, project=None, *, version=1):
     item = record.json(name + "/evaluacion.json")
     process = record.json(name + "/resultado.json")
     require(item == saved and item["proceso"] == process and item["workspace_intacto"] is True,
@@ -97,6 +98,17 @@ def evaluation(record, name, saved, expected, runner, acceptance=None, project=N
     require(isinstance(cwd, str) and Path(cwd).is_absolute() and isinstance(command, list)
             and command and isinstance(command[0], str) and Path(command[0]).is_absolute(),
             "Comando o cwd de evaluación inválido")
+    require(type(version) is int and version in (1, EVALUATION_VERSION), "Versión de evaluación desconocida")
+    if version == EVALUATION_VERSION:
+        require(type(item.get("version")) is int and item["version"] == EVALUATION_VERSION,
+                "Falta versión de la evaluación aislada")
+        require(process["comando"][0] == PYTHON and process["politica_entorno"] == "evaluation",
+                "Intérprete o entorno de evaluación aislada inválido")
+        materials = (runner,) + ((acceptance,) if acceptance is not None else ())
+        validate_isolation(process, materials=materials, log=record.path / name)
+    else:
+        require("version" not in item and "aislamiento" not in process,
+                "Evidencia aislada sin procedencia de versión nueva")
     wanted = [command[0], "-B", str(runner), "--project", cwd,
               "--report", str(record.path / name / "pruebas.json")]
     if acceptance is not None:
@@ -123,6 +135,11 @@ def validate_evidence(development_run, reevaluation_run, project_root=PROJECT):
     try:
         d, r, p = dev.json("resultado.json"), ree.json("resultado.json"), ree.json("procedencia.json")
         base = dev.json("referencia/procedencia.json")
+        version = d.get("version_evaluacion", 1)
+        require(type(version) is int and version in (1, EVALUATION_VERSION)
+                and type(base.get("version_evaluacion", 1)) is int
+                and base.get("version_evaluacion", 1) == version,
+                "Versión de procedencia de evaluación incoherente o desconocida")
         require(d["registro"] == str(dev.path) and r["registro"] == str(ree.path), "Ubicación de registro incoherente")
         require(d["tarea"] == base["tarea"] == "inspect-json" and base["tipo"] == "proyecto_existente"
                 and d["procedencia"] == base, "Procedencia de desarrollo inválida")
@@ -231,7 +248,8 @@ def validate_evidence(development_run, reevaluation_run, project_root=PROJECT):
             for kind in ("aceptacion", "regresion"):
                 counts = evaluation(dev, f"{phase}/{kind}", d[phase][kind], expected[kind],
                                     dev.path / "referencia/project_test_runner.py",
-                                    dev.path / "referencia/evaluar.py" if kind == "aceptacion" else None)
+                                    dev.path / "referencia/evaluar.py" if kind == "aceptacion" else None,
+                                    version=version)
                 require(counts["clasificacion"] == ("superadas" if kind == "regresion" else "fallos_asercion"),
                         "Resultados originales incompatibles con esta reevaluación")
             require(d[phase]["aceptacion"]["proceso"]["directorio_trabajo"]

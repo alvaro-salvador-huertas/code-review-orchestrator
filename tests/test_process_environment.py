@@ -181,7 +181,8 @@ sys.exit(0 if result.wasSuccessful() else 1)
                     'regresion': ['test_probe.TestProbe.test_probe']}
         results = {}
         log = self.root / 'proyecto'
-        with patch.dict(os.environ, self.host, clear=True):
+        from evaluator_stub import simulated
+        with patch.dict(os.environ, self.host, clear=True), patch.object(repair_project, "run_isolated", simulated()):
             repair_project.evaluate(self.workspace, frozen, log, expected, results, None, lambda: None)
         self.assertEqual(set(results), {'aceptacion', 'regresion'})
         for result in results.values():
