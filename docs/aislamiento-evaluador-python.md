@@ -1,10 +1,12 @@
-# Aislamiento del evaluador Python (primera PR)
+# Aislamiento de los evaluadores Python de proyectos
 
 El recorrido de `orchestrate_project.py` usa Podman **rootless local** para todas
 las etapas que ejecutan Python del proyecto: inventario dinámico de la base
 (`inventory_base`) y evaluación inicial/posterior (`evaluate_flow`, incluidas
 aceptación, regresión, hallazgos y anidamiento). Se aplica también a las tareas
-configurables y a las entregas con varios archivos.
+configurables y a las entregas con varios archivos. La CLI directa
+`repair_project.py inspect-json` también aísla sus cuatro evaluaciones:
+aceptación y regresión, tanto iniciales como posteriores.
 
 `unittest.discover()` importa módulos, ejecuta su inicialización y puede invocar
 `load_tests`; no basta con aislar los métodos de prueba. Por eso el proceso
@@ -12,6 +14,74 @@ completo de `project_test_inventory.py` entra en el contenedor desde
 `inventory_base`, antes de disponer de un candidato. El descubrimiento de la
 regresión dentro de `project_flow_runner.py` también queda dentro. La extracción
 de blobs Git y el inventario estático por AST no importan código del proyecto.
+
+## CLI directa repair_project.py
+
+`python3 -B repair_project.py inspect-json` conserva su interfaz y autorización:
+solo una aceptación inicial con la funcionalidad ausente (diagnóstico
+`unrecognized arguments: --format json`) y una regresión superada permiten
+invocar al desarrollador una vez. Las evaluaciones iniciales y posteriores se
+lanzan mediante `run_isolated()`, con 60 s para aceptación y 180 s para regresión.
+El agente conserva su política Codex y su límite de 300 s; no se introduce un
+modelo ni una invocación adicionales. La revisión y la incorporación siguen
+requiriendo su decisión humana posterior.
+
+`freeze()` extrae la base de Git y descubre identidades por AST, sin importar
+el proyecto ni ejecutar `load_tests`. Congela contrato, aceptación y
+`project_test_runner.py`, y conserva los hashes, modos e inventarios existentes.
+Cada contenedor monta solo su copia del proyecto y el runner de solo lectura;
+aceptación monta además `referencia/evaluar.py`, también de solo lectura. No se
+monta la referencia completa ni el registro. La salida usa el tmpfs acotado de
+32 MiB/1024 inodos y los pipes de 4 MiB por canal de la frontera común.
+
+Runtime ausente, controles inefectivos o cuotas excedidas detienen el recorrido
+como fallo técnico; el timeout mantiene el código 4. Un fallo inicial impide
+invocar al agente. Antes de clasificar informes se comprueba la evidencia de
+imagen, opciones, montajes, cuotas y limpieza con `validate_isolation()`.
+Una evidencia ausente o un informe incompleto deja la etapa sin acreditar y
+mantiene el rechazo con código 6. Se conserva `pruebas.json` versión 1, sus
+identidades, subtests y criterios de clasificación; los controles de integridad
+del original, la referencia, la entrega y los registros cerrados permanecen.
+
+### Versión y compatibilidad de los registros
+
+Los nuevos resúmenes y su procedencia congelada llevan `version_evaluacion: 2`.
+Cada `evaluacion.json` lleva `version: 2` y su proceso conserva el sello de
+`aislamiento` versión 2 que genera la frontera común. Son versiones de
+procedencia/evidencia, independientes del formato de `pruebas.json`.
+
+El lector de `review_project.py` comprueba que resumen y procedencia coinciden
+en versión. En la versión nueva valida el intérprete, el entorno y el comando
+Podman completo, incluidos montajes, cuotas y ausencia confirmada de recursos,
+en las cuatro etapas. Quitar el sello de una etapa nueva no la convierte en
+histórica; se rechaza incluso si se actualizan sus inventarios y resúmenes.
+También se rechazan versiones desconocidas o incoherentes y descensos parciales
+de versión. Los registros son evidencia local comprobable, no una firma
+criptográfica que autentique su origen frente a una reescritura íntegra.
+
+Los registros previos sin marcadores se leen por la vía histórica (versión
+implícita 1), con sus comprobaciones originales de comandos, informes, candidato,
+Git, autoridades, modos, hashes y correspondencia entre copias. Esa vía no acepta
+sellos nuevos ni etapas marcadas como aisladas y no añade evidencia retroactiva.
+La lectura no prepara imagen ni ejecuta Podman o código conservado.
+
+El lector completo conserva el contrato histórico de desarrollo rechazado más
+reevaluación conservada de la misma entrega: no se amplían las autorizaciones
+para revisar o incorporar. Las etapas del desarrollo nuevo se validan como
+versión 2; las nuevas evaluaciones del registro de reevaluación histórico siguen
+su contrato anterior. Esta PR no migra ese punto de entrada ni los recorridos
+de casos individuales.
+
+Las regresiones ordinarias usan el stub explícito de `tests/evaluator_stub.py`
+para proyectos sintéticos; no acreditan aislamiento real. Cubren runtime y
+arranque inicial fallidos sin agente, cuatro etapas válidas, cuota/timeout y
+evidencia posterior fallida, e informes incompletos. El lector se prueba con
+registros históricos válidos y nuevos, con sus inventarios coherentes, quitando
+sellos, alterando montajes/limpieza, cambiando versiones y mezclando candidatos.
+La integración real número 11 invoca la CLI privada de producción con un agente
+sintético, valida las cuatro etapas con el lector y comprueba la ausencia de
+sus cuatro contenedores y cuatro volúmenes. Las pruebas comunes de la frontera
+siguen cubriendo red, señuelos, cuotas y timeout sin duplicarlas.
 
 ## Preparación separada de la evaluación
 
@@ -133,14 +203,15 @@ marcador de ejecución en el anfitrión y una importación hostil durante el
 inventario. En ambos puntos el controlador se detiene antes de ejecutar el
 proyecto cuando no puede aplicar el aislamiento.
 
-Las diez integraciones opt-in usan Podman real, sin sustituirlo: recorrido
+Las once integraciones opt-in usan Podman real, sin sustituirlo: recorrido
 completo de un candidato válido con agentes sintéticos; señuelo fuera de
 montajes y destino TCP loopback controlado con datos sintéticos; timeout con
 hijo y comprobación de ausencia del contenedor y del proceso; inventario con
 importación que intentaría escribir fuera de los montajes; HOME temporal con
 un montaje automático sintético que el evaluador debe bloquear; excesos separados
 de resultados, stdout y stderr; exceso agregado entre varios archivos; e informe
-normal con cuotas pequeñas. Cuando se habilitan,
+normal con cuotas pequeñas; y la CLI directa `repair_project.py` con cuatro
+evaluaciones, lectura de su evidencia y agente simulado. Cuando se habilitan,
 un runtime roto produce **fallos**, no skips silenciosos.
 
 ### Integración real en GitHub Actions
@@ -176,7 +247,7 @@ informar `apparmorEnabled=false` aunque el módulo del anfitrión esté activo.
 Este check conserva AppArmor del sistema; no acredita un perfil AppArmor
 adicional dentro del contenedor. La distinción está en el
 [código de esa versión](https://github.com/containers/podman/blob/v4.9.3/vendor/github.com/containers/common/pkg/apparmor/apparmor_linux.go).
-La primera ejecución de esta PR, [43615504294](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/actions/runs/43615504294),
+La primera ejecución de la PR #28, [43615504294](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/actions/runs/43615504294),
 falló antes de preparar la imagen por exigir incorrectamente ese booleano de
 Podman. `aa-status` confirmó el módulo activo. La comprobación corregida exige
 el módulo del anfitrión sin cambiar la configuración del runtime.
@@ -194,7 +265,7 @@ CRO_REAL_PODMAN=1 python3 -B -m unittest discover \
 Las versiones de los paquetes del runner pueden avanzar con las actualizaciones
 de Ubuntu; se registran para diagnóstico, mientras que las acciones y la imagen
 Python quedan fijadas. Una repetición debe cumplir la misma sonda efectiva.
-La salida de unittest debe indicar exactamente **10 pruebas, OK y cero
+La salida de unittest debe indicar exactamente **11 pruebas, OK y cero
 omisiones**. El pipe de registro conserva los errores de unittest mediante
 `pipefail`; una omisión o un cambio de recuento también hace fallar el job.
 
@@ -641,16 +712,16 @@ pasó y la comprobación posterior no encontró contenedores, volúmenes de prue
 ni monitores de cuota restantes. La PR #27 se mantiene en borrador; este cierre
 se guarda únicamente en un commit local, sin publicarlo.
 
-## Fuera de esta primera PR
+## Puntos de entrada fuera del aislamiento
 
-No se aíslan las invocaciones directas de `repair_project.py`,
-`project_test_runner.py`, `project_flow_runner.py`, `project_test_inventory.py`,
+No se aíslan las invocaciones directas de `project_test_runner.py`, `project_flow_runner.py`, `project_test_inventory.py`,
 los evaluadores `evals/**/evaluar.py`, ni los recorridos de casos
 `run_case.py`, `repair_case.py`, `orchestrate_case.py` y `evaluate_reviewer.py`.
 Tampoco la ejecución manual de `unittest`/scripts ni los agentes de desarrollo y
 revisión, que conservan su política Codex. Los lectores y planificadores no
 pasan a ejecutar candidatos por este cambio. La protección aquí descrita se
-aplica al inventario y evaluación iniciados desde `orchestrate_project.py`.
+aplica al inventario y evaluación iniciados desde `orchestrate_project.py`
+y a las cuatro evaluaciones de `repair_project.py inspect-json`.
 
 Referencias: [Podman run](https://docs.podman.io/en/latest/markdown/podman-run.1.html),
 [preparación rootless](https://github.com/podman-container-tools/podman/blob/main/docs/tutorials/rootless_tutorial.md),

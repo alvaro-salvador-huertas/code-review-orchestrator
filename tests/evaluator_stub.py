@@ -35,12 +35,20 @@ def run_isolated(command, workspace, log, timeout, *, materials, runner):
 '''
 
 
-def install(testcase):
+def simulated():
     import python_evaluator
     namespace = vars(python_evaluator).copy()
     exec(STUB, namespace)
+    return namespace['run_isolated']
+
+
+def install(testcase):
+    import python_evaluator
+    import repair_project
+    substitute = simulated()
     testcase.addCleanup(patch.stopall)
-    patch.object(project_flow, 'run_isolated', namespace['run_isolated']).start()
+    patch.object(project_flow, 'run_isolated', substitute).start()
+    patch.object(repair_project, 'run_isolated', substitute).start()
     # Las CLI de los fixtures importan una copia privada del controlador.
     target = testcase.root / 'python_evaluator.py'
     target.write_text(Path(python_evaluator.__file__).read_text() + '\n' + STUB)

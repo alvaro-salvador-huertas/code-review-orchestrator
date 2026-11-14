@@ -81,6 +81,52 @@ except OSError:
             self.assertEqual(stopped.exception.code, 3)
             self.assertEqual(stopped.exception.state, 'fallo_tecnico')
 
+    def test_11_repair_project_cli_cuatro_evaluaciones_aisladas(self):
+        import repair_project
+        import review_project
+        from test_repair_project import TestRepairProject
+        fixture = TestRepairProject()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        # La CLI privada usa producción, sin el stub de la suite ordinaria.
+        (fixture.root/'python_evaluator.py').write_bytes(Path(sandbox.__file__).read_bytes())
+        before = repair_project.tree_state(fixture.root, filter_local=True)
+        completed = subprocess.run(fixture.cli_command(), env=fixture.cli_env(),
+            capture_output=True, text=True, timeout=120)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(repair_project.tree_state(fixture.root, filter_local=True), before)
+        paths = list((fixture.root/'runs').glob('*/resultado.json'))
+        self.assertEqual(len(paths), 1)
+        log = paths[0].parent
+        result = json.loads(paths[0].read_text())
+        self.assertEqual(result['estado'], 'supera_las_comprobaciones_disponibles')
+        self.assertEqual(result['version_evaluacion'], 2)
+        self.assertEqual(result['procedencia']['version_evaluacion'], 2)
+        self.assertEqual(len(fixture.calls_read()), 1)
+        self.assertEqual(result['agente']['invocaciones'], 1)
+        self.assertEqual(result['revision'], 'pendiente_no_conectada')
+        self.assertTrue(all(result['integridad'].values()))
+        record = review_project.Evidence(log)
+        containers, volumes = set(), set()
+        for phase in ('inicial', 'posterior'):
+            for kind in ('aceptacion', 'regresion'):
+                item = result[phase][kind]
+                counts = review_project.evaluation(record, f'{phase}/{kind}', item,
+                    result['procedencia']['pruebas_esperadas'][kind],
+                    log/'referencia/project_test_runner.py',
+                    log/'referencia/evaluar.py' if kind == 'aceptacion' else None, version=2)
+                self.assertEqual(counts['clasificacion'], item['clasificacion'])
+                process = item['proceso']
+                self.assertEqual(process['limite_segundos'], 60 if kind == 'aceptacion' else 180)
+                stamp = process['aislamiento']
+                self.assertTrue(stamp['limpieza_confirmada'])
+                containers.add(stamp['contenedor'])
+                volumes.add(stamp['volumen_resultados'])
+                self.assertEqual(sandbox.runtime_call(['container','exists',stamp['contenedor']]).returncode, 1)
+                self.assertEqual(sandbox.runtime_call(['volume','exists',stamp['volumen_resultados']]).returncode, 1)
+        self.assertEqual(len(containers), 4)
+        self.assertEqual(len(volumes), 4)
+
     def test_6_limite_agregado_de_resultados_durante_escritura(self):
         self.check_output_overflow('resultados')
 

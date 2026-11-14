@@ -18,6 +18,7 @@ from uuid import uuid4
 from case_evidence import digest, parse_json, read_regular, require, unified_diff
 from repair_case import ProcessInterrupted, ProcessRecordError, run_process, timestamp, write_json
 from process_environment import process_environment
+from python_evaluator import PYTHON, run_isolated, validate_isolation, check_isolated_process
 
 
 PROJECT = Path(__file__).resolve().parent
@@ -29,6 +30,7 @@ AGENT_TIMEOUT = 300
 ACCEPTANCE_TIMEOUT = 60
 REGRESSION_TIMEOUT = 180
 PREFLIGHT_TIMEOUT = 10
+EVALUATION_VERSION = 2
 EXCLUDED = {".git", "runs", "__pycache__", ".codex", ".agents", ".aws", ".venv",
             ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".vscode", ".idea"}
 
@@ -171,7 +173,7 @@ def freeze(root, destination):
     (destination / "contrato.md").write_bytes(contract)
     (destination / "evaluar.py").write_bytes(acceptance)
     (destination / "project_test_runner.py").write_bytes(required(PROJECT / "project_test_runner.py"))
-    provenance = {"tipo": "proyecto_existente", "tarea": "inspect-json", "commit_base": base,
+    provenance = {"version_evaluacion": EVALUATION_VERSION, "tipo": "proyecto_existente", "tarea": "inspect-json", "commit_base": base,
                   "head_origen": git("rev-parse", "HEAD").decode().strip(),
                   "estado_materiales": git("status", "--porcelain=v1", "--", CONTRACT, ACCEPTANCE, EDITABLE).decode(),
                   "materiales_del_arbol_actual": {CONTRACT: digest(contract), ACCEPTANCE: digest(acceptance)},
@@ -196,14 +198,18 @@ def evaluate(workspace, frozen, directory, expected, results, progress, check_in
         log = directory / kind
         log.mkdir()
         report = log / "pruebas.json"
-        command = [sys.executable, "-B", str(frozen / "project_test_runner.py"),
+        command = [PYTHON, "-B", str(frozen / "project_test_runner.py"),
                    "--project", str(workspace), "--report", str(report)]
         if kind == "aceptacion":
             command += ["--acceptance", str(frozen / "evaluar.py")]
         before = tree_state(workspace)
-        item = results[kind] = {"proceso": None, "clasificacion": "no_acreditada"}
+        materials = (frozen / "project_test_runner.py",)
+        if kind == "aceptacion":
+            materials += (frozen / "evaluar.py",)
+        item = results[kind] = {"version": EVALUATION_VERSION, "proceso": None, "clasificacion": "no_acreditada"}
         try:
-            item["proceso"] = run_process(command, workspace, log, timeout)
+            item["proceso"] = run_isolated(command, workspace, log, timeout,
+                                            materials=materials, runner=run_process)
         except (ProcessInterrupted, ProcessRecordError) as exc:
             item["proceso"] = exc.result
             raise
@@ -213,8 +219,9 @@ def evaluate(workspace, frozen, directory, expected, results, progress, check_in
         check_integrity()
         if not item["workspace_intacto"]:
             raise StopProject(5, "modificacion_no_permitida", "Las pruebas alteraron su copia de evaluación")
-        check_process(item["proceso"])
+        check_isolated_process(item["proceso"])
         try:
+            validate_isolation(item["proceso"], materials=materials, log=log)
             item.update(classify_report(required(report), expected[kind], item["proceso"],
                                         required(log / "stderr.txt").decode("utf-8")))
         except (ValueError, KeyError, TypeError) as exc:
@@ -291,7 +298,7 @@ def develop(workspace, log, prompt, result, progress, save, *, on_invoke=None, t
 def run_project(root=PROJECT, *, progress=None):
     root = Path(root).resolve()
     started = time.monotonic()
-    result = {"tarea": "inspect-json", "registro": None, "estado": "en_preparacion", "codigo_salida": 8,
+    result = {"version_evaluacion": EVALUATION_VERSION, "tarea": "inspect-json", "registro": None, "estado": "en_preparacion", "codigo_salida": 8,
               "inicio_utc": timestamp(), "max_invocaciones": 1, "reserva_invocacion": False,
               "agente": {"invocaciones": 0, "proceso": None}, "inicial": {}, "posterior": {},
               "integridad": {}, "error": None, "revision": "pendiente_no_conectada",

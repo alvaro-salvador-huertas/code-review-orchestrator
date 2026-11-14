@@ -73,7 +73,8 @@ class TestRepairProject(unittest.TestCase):
         self.write(controller.ACCEPTANCE, ACCEPTANCE)
         # Copia del controlador para sus pruebas de CLI; no entra en el commit base fixture.
         for name in ("repair_project.py", "project_test_runner.py", "repair_case.py", "run_case.py",
-                     "case_config.py", "case_evidence.py", "process_environment.py"):
+                     "case_config.py", "case_evidence.py", "process_environment.py",
+                     "python_evaluator.py", "bounded_output.py"):
             self.write(name, (PROJECT / name).read_text())
         self.fake = self.temporary / "codex"
         self.settings = self.temporary / "opciones.json"
@@ -81,6 +82,8 @@ class TestRepairProject(unittest.TestCase):
         self.configure()
         self.addCleanup(patch.stopall)
         patch.object(controller, "CODEX_EXECUTABLE", str(self.fake)).start()
+        from evaluator_stub import install
+        install(self)
 
     def write(self, name, text):
         path = self.root / name
