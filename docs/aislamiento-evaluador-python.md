@@ -143,6 +143,73 @@ de resultados, stdout y stderr; exceso agregado entre varios archivos; e informe
 normal con cuotas pequeñas. Cuando se habilitan,
 un runtime roto produce **fallos**, no skips silenciosos.
 
+### Integración real en GitHub Actions
+
+El workflow `.github/workflows/tests.yml` añade el check **Integración real de
+Podman rootless** (job `podman-rootless`) en un runner alojado `ubuntu-24.04`.
+Se ejecuta en **todas las PR dirigidas a main**, incluidas las PR en borrador,
+sin filtros de rutas: cambios de workflow, aislamiento, captura de salidas y
+pruebas quedan cubiertos. El job ordinario `tests` conserva su ejecución y sus
+omisiones opt-in; el job real se habilita solo para el evento `pull_request`,
+no para `push` ni `workflow_dispatch`.
+
+Ambos jobs usan `contents: read`, checkout sin credenciales persistentes y las
+mismas acciones fijadas por SHA completo. El job real instala paquetes oficiales
+de Ubuntu (`podman`, `uidmap`, `crun`, `slirp4netns`, `fuse-overlayfs` y
+`dbus-user-session`) y activa la sesión systemd del usuario habitual con linger.
+La instalación, la preparación de sesión y la consulta de AppArmor usan sudo;
+Podman y las pruebas se ejecutan sin sudo. No requiere secretos ni llamadas a modelos: los agentes de prueba
+son fixtures sintéticos.
+
+Registra versiones del sistema, Python y paquetes, UID/GID, rangos subordinados,
+helpers de uidmap, cgroups, delegación systemd y estado de AppArmor. Falla si no
+hay rangos de al menos 65536 UID/GID, sesión de usuario operativa, cgroups v2 o
+controladores CPU/memoria/procesos. Comprueba rootless y seccomp en
+`podman info`, y exige que el módulo AppArmor del anfitrión esté activo. Registra
+su estado con `aa-status` y el sysctl de restricción de namespaces, sin cambiarlo.
+No relaja perfiles, sysctls, namespaces ni cuotas. La sonda
+`check` verifica los límites efectivos dentro del contenedor antes de ejecutar
+los candidatos; estos conservan el bloqueo de red y de descargas.
+
+Podman 4.9.3 no aplica perfiles AppArmor de contenedor en rootless y puede
+informar `apparmorEnabled=false` aunque el módulo del anfitrión esté activo.
+Este check conserva AppArmor del sistema; no acredita un perfil AppArmor
+adicional dentro del contenedor. La distinción está en el
+[código de esa versión](https://github.com/containers/podman/blob/v4.9.3/vendor/github.com/containers/common/pkg/apparmor/apparmor_linux.go).
+La primera ejecución de esta PR, [43615504294](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/actions/runs/43615504294),
+falló antes de preparar la imagen por exigir incorrectamente ese booleano de
+Podman. `aa-status` confirmó el módulo activo. La comprobación corregida exige
+el módulo del anfitrión sin cambiar la configuración del runtime.
+
+El orden reproducible, una vez preparada esa sesión rootless en Ubuntu, es:
+
+```sh
+python3 -B python_evaluator.py prepare
+python3 -B python_evaluator.py check
+CRO_REAL_PODMAN=1 python3 -B -m unittest discover \
+  -s tests -p test_python_isolation_real.py -v
+```
+
+`prepare` reutiliza el digest fijado en el evaluador, no una etiqueta flotante.
+Las versiones de los paquetes del runner pueden avanzar con las actualizaciones
+de Ubuntu; se registran para diagnóstico, mientras que las acciones y la imagen
+Python quedan fijadas. Una repetición debe cumplir la misma sonda efectiva.
+La salida de unittest debe indicar exactamente **10 pruebas, OK y cero
+omisiones**. El pipe de registro conserva los errores de unittest mediante
+`pipefail`; una omisión o un cambio de recuento también hace fallar el job.
+
+Antes de preparar la imagen se registran los contenedores y volúmenes
+`cro-eval-*` existentes. Un paso `always()` vuelve a consultarlos y compara
+nombres con ese inventario. Los residuos nuevos hacen fallar el check aunque
+se puedan retirar. Se intenta limpiar únicamente nombres concretos del patrón
+UUID del evaluador: primero los contenedores, después desmontaje y retirada
+sin fuerza de los volúmenes. Finalmente se verifica de nuevo la ausencia.
+Nunca se usa `prune`, ni se elimina un recurso previo. Un error de consulta no
+se interpreta como ausencia; si no pudo registrarse el inventario inicial, no
+se atribuyen ni eliminan recursos sin evidencia. La limpieza final depende de
+que el runner siga disponible para ejecutar `always()`; no cubre la pérdida de
+la máquina virtual.
+
 ### Antecedente: sesión inicial del 11 de noviembre de 2026
 
 En la sesión inicial, Ubuntu 24.04.5 no tenía Podman ni uidmap instalados.

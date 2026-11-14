@@ -26,3 +26,128 @@ jobs:
       - name: Ejecutar pruebas del controlador
         working-directory: .
         run: python3 -B -m unittest discover -s tests -v
+
+  podman-rootless:
+    name: Integración real de Podman rootless
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Preparar Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Preparar la sesión rootless con paquetes de Ubuntu
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman uidmap crun slirp4netns fuse-overlayfs dbus-user-session
+          test "$(id -u)" -ne 0
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Comprobar y registrar requisitos rootless
+        run: |
+          cat /etc/os-release
+          uname -r
+          python3 --version
+          podman --version
+          id
+          dpkg-query -W podman uidmap crun slirp4netns fuse-overlayfs dbus-user-session
+          cat /etc/subuid /etc/subgid
+          ls -l /usr/bin/newuidmap /usr/bin/newgidmap
+          test "$(id -u)" -ne 0
+          awk -F: -v user="$(id -un)" -v uid="$(id -u)" '($1 == user || $1 == uid) && $3 >= 65536 {ok=1} END {exit !ok}' /etc/subuid || { echo '::error::Falta un rango subuid de al menos 65536 para el usuario rootless'; exit 1; }
+          awk -F: -v user="$(id -un)" -v uid="$(id -u)" '($1 == user || $1 == uid) && $3 >= 65536 {ok=1} END {exit !ok}' /etc/subgid || { echo '::error::Falta un rango subgid de al menos 65536 para el usuario rootless'; exit 1; }
+          test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs || { echo "::error::Se requiere cgroups v2"; exit 1; }
+          cat /sys/fs/cgroup/cgroup.controllers
+          cat /proc/self/cgroup
+          systemctl --user show-environment > /dev/null
+          systemctl show "user@$(id -u).service" -p Delegate -p ControlGroup
+          sudo aa-status
+          test "$(cat /sys/module/apparmor/parameters/enabled)" = Y
+          sysctl kernel.apparmor_restrict_unprivileged_userns
+          podman --remote=false info --format json | tee "$RUNNER_TEMP/podman-info.json"
+          python3 -B - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          host = json.loads((Path(os.environ['RUNNER_TEMP'])/'podman-info.json').read_text())['host']
+          assert host['security']['rootless'] is True, 'Podman no es rootless'
+          assert host['security']['seccompEnabled'] is True, 'Seccomp no está habilitado'
+          # Podman 4.9.3 no aplica perfiles AppArmor de contenedor en rootless.
+          # El módulo del anfitrión se comprueba arriba y no se reconfigura.
+          print('AppArmor declarado por Podman rootless:', host['security']['apparmorEnabled'])
+          assert host['cgroupVersion'] == 'v2', 'Se requiere cgroups v2'
+          assert {'cpu', 'memory', 'pids'} <= set(host['cgroupControllers']), 'Falta delegación de CPU, memoria o procesos'
+          PYTHON
+      - name: Registrar recursos anteriores a la ejecución
+        run: |
+          podman --remote=false ps -a --filter name=cro-eval- --format '{{.Names}}' | sort > "$RUNNER_TEMP/podman-containers.before"
+          podman --remote=false volume ls --filter name=cro-eval- --format '{{.Name}}' | sort > "$RUNNER_TEMP/podman-volumes.before"
+          touch "$RUNNER_TEMP/podman-resources.ready"
+      - name: Preparar la imagen Python fijada por digest
+        run: python3 -B python_evaluator.py prepare
+      - name: Comprobar el aislamiento efectivo antes de los candidatos
+        run: python3 -B python_evaluator.py check
+      - name: Ejecutar las diez integraciones reales sin omisiones
+        run: |
+          CRO_REAL_PODMAN=1 python3 -B -m unittest discover \
+            -s tests -p test_python_isolation_real.py -v 2>&1 | tee "$RUNNER_TEMP/podman-real-tests.log"
+          python3 -B - <<'PYTHON'
+          import os, re
+          from pathlib import Path
+          log = (Path(os.environ['RUNNER_TEMP'])/'podman-real-tests.log').read_text()
+          assert re.search(r'^Ran 10 tests in [0-9.]+s$', log, re.M), 'No se ejecutaron exactamente diez integraciones'
+          assert re.search(r'^OK$', log, re.M), 'La suite debe terminar en OK sin omisiones'
+          assert not re.search(r'\bskipped\b', log), 'Las integraciones reales no pueden omitirse'
+          PYTHON
+      - name: Verificar y retirar únicamente residuos de esta ejecución
+        if: always()
+        run: |
+          # Una consulta fallida no cuenta como ausencia. Sin inventario previo,
+          # no se atribuyen ni se eliminan recursos ajenos a esta ejecución.
+          podman --remote=false ps -a --filter name=cro-eval- --format '{{.Names}}' | sort > "$RUNNER_TEMP/podman-containers.after"
+          podman --remote=false volume ls --filter name=cro-eval- --format '{{.Name}}' | sort > "$RUNNER_TEMP/podman-volumes.after"
+          if [[ ! -f "$RUNNER_TEMP/podman-resources.ready" ]]; then
+            echo '::error::No se pudo registrar el inventario previo; no se ejecutó la evaluación ni se eliminan recursos sin atribución.'
+            exit 1
+          fi
+          leaked=0
+          while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            leaked=1
+            echo "::error::Contenedor residual de esta ejecución: $name"
+            if [[ "$name" =~ ^cro-eval-[0-9a-f]{32}$ ]]; then
+              podman --remote=false rm --force --time=0 --ignore "$name" || echo "::error::No se pudo retirar $name"
+            fi
+          done < <(comm -13 "$RUNNER_TEMP/podman-containers.before" "$RUNNER_TEMP/podman-containers.after")
+          while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            leaked=1
+            echo "::error::Volumen residual de esta ejecución: $name"
+            if [[ "$name" =~ ^cro-eval-[0-9a-f]{32}-results$ ]]; then
+              podman --remote=false unshare podman volume unmount "$name" || echo "::error::No se pudo desmontar $name"
+              podman --remote=false volume rm "$name" || echo "::error::No se pudo retirar $name"
+            fi
+          done < <(comm -13 "$RUNNER_TEMP/podman-volumes.before" "$RUNNER_TEMP/podman-volumes.after")
+          podman --remote=false ps -a --filter name=cro-eval- --format '{{.Names}}' | sort > "$RUNNER_TEMP/podman-containers.final"
+          podman --remote=false volume ls --filter name=cro-eval- --format '{{.Name}}' | sort > "$RUNNER_TEMP/podman-volumes.final"
+          for resource in containers volumes; do
+            remaining=$(comm -13 "$RUNNER_TEMP/podman-$resource.before" "$RUNNER_TEMP/podman-$resource.final")
+            if [[ -n "$remaining" ]]; then
+              echo "::error::Persisten recursos ($resource): $remaining"
+              leaked=1
+            fi
+          done
+          if [[ "$leaked" -ne 0 ]]; then
+            echo '::error::La ejecución dejó residuos; se intentó su limpieza por nombre, sin prune ni limpieza global.'
+            exit 1
+          fi
+          echo 'Sin contenedores ni volúmenes residuales de esta ejecución.'
