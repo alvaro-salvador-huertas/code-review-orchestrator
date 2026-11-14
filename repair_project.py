@@ -18,7 +18,7 @@ from uuid import uuid4
 from case_evidence import digest, parse_json, read_regular, require, unified_diff
 from repair_case import ProcessInterrupted, ProcessRecordError, run_process, timestamp, write_json
 from process_environment import process_environment
-from python_evaluator import PYTHON, run_isolated, validate_isolation, check_isolated_process
+from python_evaluator import PYTHON, run_isolated, validate_isolation
 
 
 PROJECT = Path(__file__).resolve().parent
@@ -219,7 +219,12 @@ def evaluate(workspace, frozen, directory, expected, results, progress, check_in
         check_integrity()
         if not item["workspace_intacto"]:
             raise StopProject(5, "modificacion_no_permitida", "Las pruebas alteraron su copia de evaluación")
-        check_isolated_process(item["proceso"])
+        process = item["proceso"]
+        # Esta CLI también se carga como __main__: traducir aquí el fallo con
+        # su StopProject local, sin importar una segunda copia del controlador.
+        if process["estado"] in ("error_inicio", "limite_salida") and process.get("error"):
+            raise StopProject(3, "fallo_tecnico", process["error"])
+        check_process(process)
         try:
             validate_isolation(item["proceso"], materials=materials, log=log)
             item.update(classify_report(required(report), expected[kind], item["proceso"],

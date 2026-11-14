@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
@@ -66,6 +67,23 @@ class RepairProjectIsolationTests(unittest.TestCase):
         self.assertEqual(self.calls_read(), [])
         self.assertFalse(marker.exists())
         self.assertEqual(result['posterior'], {})
+
+    def test_cli_runtime_ausente_conserva_codigo_diagnostico_y_resumen(self):
+        # Fallo inyectado solo en la copia privada de la CLI del fixture.
+        (self.root/'python_evaluator.py').write_text(Path(sandbox.__file__).read_text() +
+            "\ndef require_runtime():\n    raise RuntimeError('RUNTIME_CLI_AUSENTE')\n")
+        completed = subprocess.run(fixture.TestRepairProject.cli_command(self),
+            env=fixture.TestRepairProject.cli_env(self), capture_output=True, text=True, timeout=15)
+        self.assertEqual(completed.returncode, 3, completed.stderr)
+        self.assertNotIn('Traceback', completed.stderr)
+        self.assertIn('RUNTIME_CLI_AUSENTE', completed.stderr)
+        paths = list((self.root/'runs').glob('*/resultado.json'))
+        self.assertEqual(len(paths), 1)
+        result = json.loads(paths[0].read_text())
+        self.assertEqual((result['codigo_salida'], result['estado']), (3, 'fallo_tecnico'))
+        self.assertIn('RUNTIME_CLI_AUSENTE', result['error'])
+        self.assertEqual(result['agente']['invocaciones'], 0)
+        self.assertEqual(self.calls_read(), [])
 
     def test_arranque_inicial_rechazado_no_autoriza_agente(self):
         clean = {'estado_inicial':'presente', 'estado_final':'ausente',
