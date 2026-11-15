@@ -10,13 +10,13 @@ planificador de borradores y herramientas para consultar registros. Trabaja con
 copias y conserva candidatos, informes y fallos. La incorporación al producto
 requiere autorización humana; superar el flujo no aplica el cambio automáticamente.
 
-La última release publicada es [v1.1.0](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/releases/tag/v1.1.0).
-**v1.2.0 está pendiente de publicación**: consulta sus
-[notas preparadas](docs/notas-v1.2.0.md) y los
-[pasos de publicación tras el merge](docs/publicacion-v1.2.0.md).
+La última release publicada es **[v1.2.0](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/releases/tag/v1.2.0)**.
+Consulta sus [notas](docs/notas-v1.2.0.md). El
+[procedimiento de publicación](docs/publicacion-v1.2.0.md) conserva los pasos usados.
 El [cierre de la v1](docs/cierre-v1.md), las [notas de v1.0.0](docs/notas-v1.0.0.md)
 y su [release](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/releases/tag/v1.0.0)
-conservan el historial. v1.1.0 añadió la preparación local de tareas desde planes archivados.
+conservan el historial. [v1.1.0](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/releases/tag/v1.1.0)
+añadió la preparación local de tareas desde planes archivados.
 
 Elige un primer recorrido desde la raíz de un clon:
 
