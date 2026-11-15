@@ -7,7 +7,9 @@ aceptación, regresión, hallazgos y anidamiento). Se aplica también a las tare
 configurables y a las entregas con varios archivos. La CLI directa
 `repair_project.py inspect-json` también aísla sus cuatro evaluaciones:
 aceptación y regresión, tanto iniciales como posteriores. La CLI `run_case.py`
-también ejecuta el descubrimiento y unittest dentro de esta frontera.
+también ejecuta el descubrimiento y unittest dentro de esta frontera. La
+evaluación compartida `repair_case.evaluate()` aísla asimismo las pruebas de
+reparación (directa y orquestada) y de preparación de `evaluate_reviewer.py`.
 
 `unittest.discover()` importa módulos, ejecuta su inicialización y puede invocar
 `load_tests`; no basta con aislar los métodos de prueba. Por eso el proceso
@@ -133,8 +135,9 @@ No se amplía la CLI de consulta de registros generales a este formato simple.
 Los imports de la frontera y de `run_process` son diferidos dentro de
 `run_case()`: `python_evaluator` importa `repair_case`, que reutiliza las
 constantes y el reloj de `run_case`. Se prueban tres órdenes de importación en
-procesos nuevos, además de la CLI real, para evitar un ciclo de imports. No se
-migra `repair_case.evaluate()` ni los recorridos de reparación y revisión.
+procesos nuevos, además de la CLI real, para evitar un ciclo de imports. La migración de
+`repair_case.evaluate()` se describe en el apartado siguiente; la ejecución de
+los agentes conserva su política anterior.
 
 La suite ordinaria sustituye la frontera solo en fixtures declarados; cubre
 códigos 0/1 de unittest, timeout, arranque/runtime fallidos sin ejecutar el
@@ -144,6 +147,88 @@ case_01 supera las pruebas y case_02 falla por aserción, ambos con CLI 0. Valid
 la procedencia, las entradas de solo lectura y la ausencia de cada contenedor
 y volumen por su nombre concreto. Red, cuotas y timeout siguen cubiertos por
 las integraciones compartidas, sin duplicarlas.
+
+## Evaluación compartida de reparación de casos
+
+`repair_case.evaluate()` sigue creando `workspace/solution.py` y
+`workspace/test_solution.py` con los bytes recibidos. Ahora ejecuta unittest y su
+descubrimiento mediante `run_isolated()`: solo monta esa copia de trabajo, de
+solo lectura, con el límite de 30 s, la imagen y los demás controles comunes.
+No monta los originales, el registro ni los materiales del agente. El volumen
+acotado se sitúa en `evaluacion/` para no solaparse con el bind de `workspace/`.
+Los canales se mueven con `replace` a `stdout.txt` y `stderr.txt`, sin recapturar
+ni duplicar su contenido. Se mantienen las comprobaciones de bytes de solución
+y pruebas, y `resultado.json` en la ubicación de siempre. Un fallo al publicar
+un canal queda registrado e impide considerar fiable la evaluación.
+
+Las etapas nuevas llevan `version_evaluacion: 2` y el sello de `aislamiento` de
+la frontera. El proceso bruto se conserva en `evaluacion/resultado.json`.
+`validate_evaluation()` exige que el resumen y ese proceso coincidan, y valida
+el intérprete, entorno, comando, montajes, cuotas y limpieza antes de acreditar
+unittest. Es una lectura estática: no arranca Podman ni ejecuta materiales.
+El import de `python_evaluator` es diferido porque este importa `repair_case`;
+la CLI también maneja las excepciones del módulo compartido cuando se carga
+como `__main__`.
+
+### Transiciones y consumidores
+
+Tanto la CLI directa como `orchestrate_case.py` distinguen pruebas superadas,
+aserciones ordinarias y evaluación no fiable. Una evaluación inicial fiable
+puede preceder al desarrollador; runtime/arranque, cuotas, limpieza, evidencia
+incompleta, errores de prueba o timeout detienen la ejecución antes de invocarlo.
+La clasificación textual de aserciones conserva sus requisitos anteriores.
+Un fallo de infraestructura posterior no se presenta como aserción y no puede
+autorizar corrección ni revisión. El timeout tiene código 4; la detención técnica
+usa el diagnóstico del proceso y código 6 en la reparación directa, que la
+orquestación traduce según sus estados existentes (error técnico, código 8).
+Las aserciones posteriores fiables mantienen `no_supera_pruebas`, código 1,
+y la transición de corrección con la misma partida, feedback y presupuesto.
+
+`run_repair()` conserva `version_registro: 2` para la continuidad y añade
+`version_evaluacion: 2`, coherente con ambas etapas. `review_case.validate_repair()`
+exige la nueva evidencia en cada fase, además de sus comprobaciones anteriores
+de candidato, pruebas congeladas, hashes, diffs, integridad y continuidad.
+Eliminar el sello no se acepta aunque se reescriban los resúmenes, el proceso
+bruto y los inventarios. Quitar solo el marcador superior tampoco convierte las
+etapas nuevas en históricas. Estos registros locales no son firmas frente a
+una reescritura íntegra de todos sus materiales y su procedencia.
+
+`evaluate_reviewer.prepare()` usa el mismo evaluador compartido. Sus nuevas
+preparaciones añaden el marcador de versión y congelan también
+`python_evaluator.py` y `bounded_output.py`. El verificador contrasta el sello
+y el proceso bruto de cada candidato, aunque la copia evaluada se haya trasladado
+desde el temporal al registro; verifica sus bytes contra las fuentes congeladas
+sin seguir ni abrir la antigua ruta temporal. Un fallo impide reservar o lanzar
+al revisor.
+
+### Compatibilidad y comprobaciones
+
+Los registros históricos de reparación v1/v2 sin marcador de evaluación siguen
+sus comprobaciones originales y no reciben aislamiento retroactivo. Las
+preparaciones históricas conservan su lista anterior de fuentes y el cotejo
+original de los bytes del lanzador con los congelados; un cambio de runtime
+sigue invalidando su lanzamiento como antes. La lectura no reevalúa candidatos.
+Se prueban una reparación histórica v2 y una preparación histórica, construidas
+como fixtures explícitos, sin modificar sus datos durante la lectura ni llamar
+a Podman. Las pruebas históricas v1 preexistentes permanecen.
+
+La suite ordinaria simula explícitamente la frontera en sus fixtures de casos;
+no acredita contenedores. Las regresiones comprueban fallo inicial sin agente,
+fallo posterior sin corrección/revisión, aserciones con partida y feedback exactos,
+tampering de continuidad y rechazo de sellos ausentes con hashes actualizados.
+La política y los límites de los agentes, y la decisión humana de incorporación,
+no cambian.
+
+La nueva integración real número 13 invoca `repair_case.py case_02` de producción
+con un caso sintético y un desarrollador ejecutable simulado. Valida la evaluación
+inicial fallida por aserción, el resultado posterior superado, las rutas históricas,
+los sellos y el lector de reparación. Comprueba que los dos contenedores y sus
+dos volúmenes están ausentes. Las pruebas comunes siguen cubriendo red, señuelos,
+cuotas y timeout sin duplicarlas. En la validación local previa al commit,
+la sonda pasó y las **13 integraciones reales pasaron en 51.447 s, sin omisiones**.
+Las suites enfocadas de reparación, orquestación, preparación y regresiones
+pasaron 88 pruebas. Los recuentos definitivos y enlaces de los dos jobs del SHA
+publicado se registran en el cuerpo de la PR.
 
 ## Preparación separada de la evaluación
 
@@ -266,7 +351,7 @@ marcador de ejecución en el anfitrión y una importación hostil durante el
 inventario. En ambos puntos el controlador se detiene antes de ejecutar el
 proyecto cuando no puede aplicar el aislamiento.
 
-Las doce integraciones opt-in usan Podman real, sin sustituirlo: recorrido
+Las trece integraciones opt-in usan Podman real, sin sustituirlo: recorrido
 completo de un candidato válido con agentes sintéticos; señuelo fuera de
 montajes y destino TCP loopback controlado con datos sintéticos; timeout con
 hijo y comprobación de ausencia del contenedor y del proceso; inventario con
@@ -275,7 +360,8 @@ un montaje automático sintético que el evaluador debe bloquear; excesos separa
 de resultados, stdout y stderr; exceso agregado entre varios archivos; e informe
 normal con cuotas pequeñas; y la CLI directa `repair_project.py` con cuatro
 evaluaciones, lectura de su evidencia y agente simulado; y la CLI directa
-`run_case.py` con códigos de unittest 0 y 1. Cuando se habilitan,
+`run_case.py` con códigos de unittest 0 y 1; y la CLI de reparación con sus
+dos evaluaciones y lectura de evidencia. Cuando se habilitan,
 un runtime roto produce **fallos**, no skips silenciosos.
 
 ### Integración real en GitHub Actions
@@ -329,7 +415,7 @@ CRO_REAL_PODMAN=1 python3 -B -m unittest discover \
 Las versiones de los paquetes del runner pueden avanzar con las actualizaciones
 de Ubuntu; se registran para diagnóstico, mientras que las acciones y la imagen
 Python quedan fijadas. Una repetición debe cumplir la misma sonda efectiva.
-La salida de unittest debe indicar exactamente **12 pruebas, OK y cero
+La salida de unittest debe indicar exactamente **13 pruebas, OK y cero
 omisiones**. El pipe de registro conserva los errores de unittest mediante
 `pipefail`; una omisión o un cambio de recuento también hace fallar el job.
 
@@ -779,14 +865,17 @@ se guarda únicamente en un commit local, sin publicarlo.
 ## Puntos de entrada fuera del aislamiento
 
 No se aíslan las invocaciones directas de `project_test_runner.py`, `project_flow_runner.py`, `project_test_inventory.py`,
-los evaluadores `evals/**/evaluar.py`, ni los recorridos de casos
-`repair_case.py`, `orchestrate_case.py`, `review_case.py` y `evaluate_reviewer.py`.
+los evaluadores `evals/**/evaluar.py` ni el código ejecutado directamente fuera
+de los controladores. Las llamadas a agentes de `repair_case.py`,
+`orchestrate_case.py`, `review_case.py` y `evaluate_reviewer.py` conservan su
+política Codex; sus pruebas delegadas a `repair_case.evaluate()` sí se aíslan.
 Tampoco la ejecución manual de `unittest`/scripts ni los agentes de desarrollo y
 revisión, que conservan su política Codex. Los lectores y planificadores no
 pasan a ejecutar candidatos por este cambio. La protección aquí descrita se
 aplica al inventario y evaluación iniciados desde `orchestrate_project.py`
 a las cuatro evaluaciones de `repair_project.py inspect-json` y a unittest
-iniciado por `run_case.py`.
+iniciado por `run_case.py`, y a las llamadas a `repair_case.evaluate()` desde
+la reparación directa/orquestada y la preparación del revisor.
 
 Referencias: [Podman run](https://docs.podman.io/en/latest/markdown/podman-run.1.html),
 [preparación rootless](https://github.com/podman-container-tools/podman/blob/main/docs/tutorials/rootless_tutorial.md),

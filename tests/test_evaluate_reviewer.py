@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -55,6 +56,8 @@ class TestEvaluateReviewer(unittest.TestCase):
         self.calls = self.temporary / "llamadas.jsonl"
         self.settings = self.temporary / "simulacion.json"
         self.configure_fake()
+        from evaluator_stub import install_case
+        install_case(self, self.root)
         self.addCleanup(patch.stopall)
         patch.object(review_case, "CODEX_EXECUTABLE", str(self.fake)).start()
 
@@ -162,6 +165,48 @@ sys.exit(settings.get("exit_code", 0))
             count = 4 if case_id == "case_01" else 16
             self.assertIn(f"Ran {count} tests", (evaluation / "stderr.txt").read_text())
             self.assertIn("-B", report["comando"])
+
+    def test_preparacion_nueva_sin_aislamiento_no_autoriza_con_hashes_actualizados(self):
+        experiment = self.prepare()
+        directory = experiment/'preparacion/evaluaciones/candidato_01'
+        result = json.loads((directory/'resultado.json').read_text())
+        result.pop('aislamiento')
+        launcher.save_json(directory/'resultado.json',result)
+        raw = {k:v for k,v in result.items() if k not in
+               ('version_evaluacion','pruebas_intactas','implementacion_intacta')}
+        launcher.save_json(directory/'evaluacion/resultado.json',raw)
+        prepared = json.loads((experiment/'preparacion.json').read_text())
+        prepared['sha256'] = snapshot_tree(experiment/'preparacion')
+        launcher.save_json(experiment/'preparacion.json',prepared)
+        with self.assertRaisesRegex(ValueError,'aislamiento'):
+            launcher.validate_preparation(experiment,self.root)
+        result = self.run_experiment(experiment)
+        self.assertEqual(result['codigo_salida'],1)
+        self.assertEqual(self.read_calls(),[])
+        self.assertFalse((experiment/'lanzamiento').exists())
+
+    def test_preparacion_historica_conserva_lectura_y_comprobaciones_originales(self):
+        import python_evaluator as sandbox
+        experiment = self.prepare()
+        prepared = json.loads((experiment/'preparacion.json').read_text())
+        prepared.pop('version_evaluacion')
+        frozen = experiment/'preparacion'
+        for name in ('python_evaluator.py','bounded_output.py'):
+            (frozen/'fuentes'/name).unlink()
+        for candidate_id, case_id in launcher.CANDIDATES:
+            directory = frozen/'evaluaciones'/candidate_id
+            result = json.loads((directory/'resultado.json').read_text())
+            result.pop('version_evaluacion'); result.pop('aislamiento')
+            shutil.rmtree(directory/'evaluacion')
+            launcher.save_json(directory/'resultado.json',result)
+        prepared['sha256'] = snapshot_tree(frozen)
+        launcher.save_json(experiment/'preparacion.json',prepared)
+        before = snapshot_tree(frozen)
+        with patch.object(sandbox,'runtime_call',side_effect=AssertionError('Lectura sin Podman')):
+            read,_ = launcher.validate_preparation(experiment,self.root)
+        self.assertNotIn('version_evaluacion',read)
+        self.assertEqual(snapshot_tree(frozen),before)
+        self.assertEqual(self.read_calls(),[])
 
     def test_prepare_fallida_conserva_informe_y_no_autoriza_run(self):
         (self.root / "evals/revisor/candidatos/candidato_01.py").write_text(

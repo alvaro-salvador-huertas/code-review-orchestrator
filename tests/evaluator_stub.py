@@ -52,3 +52,16 @@ def install(testcase):
     # Las CLI de los fixtures importan una copia privada del controlador.
     target = testcase.root / 'python_evaluator.py'
     target.write_text(Path(python_evaluator.__file__).read_text() + '\n' + STUB)
+
+
+def install_case(testcase, directory):
+    """Solo fixtures de casos: sustituir la frontera y la CLI privada."""
+    import python_evaluator
+    substitute = patch.object(python_evaluator, 'run_isolated', simulated())
+    substitute.start()
+    testcase.addCleanup(substitute.stop)
+    directory = Path(directory)
+    directory.joinpath('bounded_output.py').write_bytes(
+        Path(python_evaluator.__file__).with_name('bounded_output.py').read_bytes())
+    directory.joinpath('python_evaluator.py').write_text(
+        Path(python_evaluator.__file__).read_text() + '\n' + STUB)

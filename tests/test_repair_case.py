@@ -47,6 +47,8 @@ class TestRepairCase(unittest.TestCase):
         self.calls = self.temporary / "llamadas.jsonl"
         self.received = self.temporary / "entrada_recibida.txt"
         self.configure_fake()
+        from evaluator_stub import install_case
+        install_case(self, self.project)
 
     def configure_fake(self, mode="success"):
         self.fake.write_text(
@@ -245,7 +247,7 @@ class TestRepairCase(unittest.TestCase):
     def test_pruebas_posteriores_tienen_limite_de_tiempo(self):
         self.configure_fake("test_timeout")
         with patch.object(repair_case, "TIMEOUT_SECONDS", 0.3):
-            self.assertEqual(self.execute()[0], 1)
+            self.assertEqual(self.execute()[0], 4)
         self.assertEqual(self.record()[1]["pruebas_posteriores"]["estado"], "tiempo_agotado")
 
     def test_candidato_que_altera_pruebas_durante_evaluacion_no_se_acepta(self):
@@ -293,6 +295,23 @@ class TestRepairCase(unittest.TestCase):
         self.assertEqual(len(list((self.project / "runs").iterdir())), 2)
         self.assertEqual(len(self.agent_calls()), 2)
         self.assert_originals()
+
+    def test_cli_runtime_inicial_ausente_no_invoca_agente(self):
+        for name in ("repair_case.py", "run_case.py", "case_evidence.py", "case_config.py", "process_environment.py"):
+            shutil.copy2(PROJECT_ROOT/name, self.project/name)
+        target = self.project/'python_evaluator.py'
+        target.write_text((PROJECT_ROOT/'python_evaluator.py').read_text()+
+            "\ndef require_runtime():\n    raise RuntimeError('RUNTIME_CLI_AUSENTE')\n")
+        completed = subprocess.run([sys.executable,'-B',str(self.project/'repair_case.py'),'case_02'],
+            cwd=self.temporary,capture_output=True,text=True,timeout=10)
+        directory,result = self.record()
+        self.assertEqual(completed.returncode,6,completed.stderr)
+        self.assertNotIn('Traceback',completed.stderr)
+        self.assertIn('RUNTIME_CLI_AUSENTE',completed.stderr)
+        self.assertEqual(result['agente']['invocaciones'],0)
+        self.assertEqual(result['pruebas_posteriores']['estado'],'no_ejecutadas')
+        self.assertFalse(self.calls.exists())
+        self.assertIn('RUNTIME_CLI_AUSENTE',(directory/'inicial/stderr.txt').read_text())
 
     def test_cli_desde_otro_directorio_y_argumentos_invalidos(self):
         for name in ("repair_case.py", "run_case.py", "case_evidence.py", "case_config.py", "process_environment.py"):

@@ -15,13 +15,14 @@ from run_case import TIMEOUT_SECONDS, utc_timestamp
 from process_environment import process_environment
 from case_config import CASES, get_case, load_reference
 from case_evidence import (
-    read_regular, digest, require, snapshot_matches, classify_test_report, unified_diff,
+    read_regular, digest, require, snapshot_matches, classify_test_report, unified_diff, parse_json,
 )
 
 
 CODEX_EXECUTABLE = "codex"
 AGENT_TIMEOUT_SECONDS = 180
 PREFLIGHT_TIMEOUT_SECONDS = 10
+EVALUATION_VERSION = 2
 
 
 def timestamp():
@@ -122,20 +123,80 @@ def run_process(command, workspace, log_dir, timeout, prompt=None,
     return result
 
 
+def validate_evaluation(result, log_dir, *, version=EVALUATION_VERSION, relocated=False, raw_process=None):
+    """Validar procedencia sin ejecutar Podman ni seguir rutas de la evidencia."""
+    require(type(version) is int and version in (1, EVALUATION_VERSION),
+            "Versión de evaluación desconocida")
+    if version == 1:
+        require("version_evaluacion" not in result and "aislamiento" not in result,
+                "Evaluación aislada sin procedencia nueva")
+        return
+    from python_evaluator import PYTHON, validate_isolation
+    require(type(result.get("version_evaluacion")) is int
+            and result["version_evaluacion"] == EVALUATION_VERSION,
+            "Falta versión de evaluación aislada")
+    require(result["estado"] == "finalizada" and result.get("error") is None
+            and type(result["codigo_salida"]) is int, "Evaluación aislada no fiable")
+    require(isinstance(result.get("aislamiento"), dict), "Falta evidencia de aislamiento")
+    cwd = result["directorio_trabajo"]
+    require(isinstance(cwd, str) and Path(cwd).is_absolute() and Path(cwd).name == "workspace",
+            "Workspace de evaluación inválido")
+    if not relocated:
+        require(Path(cwd) == Path(log_dir)/"workspace", "Evaluación de otra copia")
+    require(result["comando"] == [PYTHON, "-B", "-m", "unittest", "discover",
+            "-s", cwd, "-p", "test_solution.py", "-v"]
+            and result["politica_entorno"] == "evaluation", "Comando o entorno de evaluación inválido")
+    raw = raw_process if raw_process is not None else read_regular(Path(log_dir)/"evaluacion/resultado.json")
+    require(raw is not None, "Falta el proceso aislado original")
+    raw = parse_json(raw)
+    require(raw == {k:v for k,v in result.items() if k not in
+            ("version_evaluacion", "pruebas_intactas", "implementacion_intacta")},
+            "Proceso aislado y resumen de evaluación incoherentes")
+    validate_isolation(raw, materials=(), log=Path(cwd).parent/"evaluacion")
+
+
 def evaluate(solution, reference_tests, log_dir):
-    """Cada evaluación recibe solo el candidato y las pruebas del controlador."""
+    """Unittest, incluido su descubrimiento, se ejecuta solo en Podman rootless."""
+    # python_evaluator importa este módulo; no introducir un import circular.
+    from python_evaluator import PYTHON, run_isolated, validate_isolation
+    from repair_case import ProcessInterrupted as SharedInterrupted, ProcessRecordError as SharedRecordError
     log_dir.mkdir()
     workspace = log_dir / "workspace"
     workspace.mkdir()
     (workspace / "solution.py").write_bytes(solution)
     (workspace / "test_solution.py").write_bytes(reference_tests)
-    command = [
-        sys.executable, "-B", "-m", "unittest", "discover",
-        "-s", str(workspace), "-p", "test_solution.py", "-v",
-    ]
-    result = run_process(command, workspace, log_dir, TIMEOUT_SECONDS)
+    command = [PYTHON, "-B", "-m", "unittest", "discover",
+               "-s", str(workspace), "-p", "test_solution.py", "-v"]
+    isolated_log = log_dir/"evaluacion"
+    result = {"comando":command, "directorio_trabajo":str(workspace),
+              "estado":"error_inicio", "codigo_salida":None, "error":None,
+              "limite_segundos":TIMEOUT_SECONDS, "politica_entorno":"evaluation"}
+    try:
+        result = run_isolated(command, workspace, isolated_log, TIMEOUT_SECONDS,
+                              materials=(), runner=run_process)
+        if result["estado"] == "finalizada":
+            require(isinstance(result.get("aislamiento"), dict), "Falta evidencia de aislamiento")
+            validate_isolation(result, materials=(), log=isolated_log)
+            require(result.get("error") is None and type(result["codigo_salida"]) is int,
+                    "Proceso aislado no fiable")
+    except (SharedInterrupted, SharedRecordError) as exc:
+        result = dict(exc.result)
+        result.update(estado="error_inicio", error=str(exc))
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        result.update(estado="error_inicio", error=str(exc))
+    result["version_evaluacion"] = EVALUATION_VERSION
     result["pruebas_intactas"] = read_regular(workspace / "test_solution.py") == reference_tests
     result["implementacion_intacta"] = read_regular(workspace / "solution.py") == solution
+    for name in ("stdout.txt", "stderr.txt"):
+        try:
+            (isolated_log/name).replace(log_dir/name)
+        except OSError as exc:
+            message = f"No se pudo publicar {name}: {exc}"
+            result.setdefault("errores_publicacion", []).append(message)
+            if not result.get("error"):
+                result["error"] = message
+            if result["estado"] != "tiempo_agotado":
+                result["estado"] = "error_inicio"
     write_json(log_dir / "resultado.json", result)
     return result
 
@@ -254,7 +315,7 @@ def run_repair(case_id, project_root, *, reference=None, originals=None,
     reference = dict(reference) if reference is not None else {}
     result = {
         "caso": case_id, "inicio_utc": started_at.isoformat().replace("+00:00", "Z"),
-        "version_registro": 2, "registro": None,
+        "version_registro": 2, "version_evaluacion": EVALUATION_VERSION, "registro": None,
         "estado": "fallo_controlador", "aceptada": False,
         "agente": {"estado": "no_ejecutado", "codigo_salida": None, "invocaciones": 0},
         "pruebas_iniciales": {"estado": "no_ejecutadas", "codigo_salida": None},
@@ -286,17 +347,20 @@ def run_repair(case_id, project_root, *, reference=None, originals=None,
     def check_evaluation(key, phase):
         evaluation = result[key]
         if evaluation["estado"] == "tiempo_agotado":
+            result["errores_controlador"].append(evaluation.get("error") or "La evaluación agotó su límite")
             stop("tiempo_agotado")
         if evaluation["estado"] != "finalizada":
+            result["errores_controlador"].append(evaluation.get("error") or "Evaluación no finalizada")
             stop("error_pruebas")
         if not evaluation["pruebas_intactas"] or not evaluation["implementacion_intacta"]:
             stop("modificacion_no_permitida")
         try:
+            validate_evaluation(evaluation, run_dir / phase)
             classification = classify_test_report(
                 reference["test_solution.py"], (run_dir / phase / "stderr.txt").read_text(),
                 evaluation["codigo_salida"],
             )
-        except ValueError as exc:
+        except (ValueError, KeyError, TypeError) as exc:
             result["error_informe"] = str(exc)
             stop("evidencia_invalida")
         result[key + "_clasificacion"] = classification
@@ -356,10 +420,7 @@ def run_repair(case_id, project_root, *, reference=None, originals=None,
         result["pruebas_iniciales"] = evaluate(
             starting_candidate, reference["test_solution.py"], run_dir / "inicial",
         )
-        if strict:
-            check_evaluation("pruebas_iniciales", "inicial")
-        if result["pruebas_iniciales"]["estado"] in ("ausente", "error_inicio"):
-            raise OSError("No se pudo iniciar el proceso de pruebas iniciales")
+        check_evaluation("pruebas_iniciales", "inicial")
         prompt = prepare_prompt(reference["contrato.md"], result["pruebas_iniciales"], run_dir / "inicial", feedback)
         (agent_log / "entrada.txt").write_bytes(prompt)
         temporary_root = Path(tempfile.gettempdir()).resolve()
@@ -409,10 +470,7 @@ def run_repair(case_id, project_root, *, reference=None, originals=None,
             result["pruebas_posteriores"] = evaluate(
                 candidate, reference["test_solution.py"], run_dir / "posterior",
             )
-            if strict:
-                check_evaluation("pruebas_posteriores", "posterior")
-            if result["pruebas_posteriores"]["estado"] in ("ausente", "error_inicio"):
-                raise OSError("No se pudo iniciar el proceso de pruebas posteriores")
+            check_evaluation("pruebas_posteriores", "posterior")
     except StopRepair:
         pass
     except (OSError, ValueError, KeyError, TypeError) as exc:

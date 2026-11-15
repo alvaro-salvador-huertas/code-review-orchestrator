@@ -96,7 +96,7 @@ jobs:
         run: python3 -B python_evaluator.py prepare
       - name: Comprobar el aislamiento efectivo antes de los candidatos
         run: python3 -B python_evaluator.py check
-      - name: Ejecutar las doce integraciones reales sin omisiones
+      - name: Ejecutar las trece integraciones reales sin omisiones
         run: |
           CRO_REAL_PODMAN=1 python3 -B -m unittest discover \
             -s tests -p test_python_isolation_real.py -v 2>&1 | tee "$RUNNER_TEMP/podman-real-tests.log"
@@ -104,7 +104,7 @@ jobs:
           import os, re
           from pathlib import Path
           log = (Path(os.environ['RUNNER_TEMP'])/'podman-real-tests.log').read_text()
-          assert re.search(r'^Ran 12 tests in [0-9.]+s$', log, re.M), 'No se ejecutaron exactamente doce integraciones'
+          assert re.search(r'^Ran 13 tests in [0-9.]+s$', log, re.M), 'No se ejecutaron exactamente trece integraciones'
           assert re.search(r'^OK$', log, re.M), 'La suite debe terminar en OK sin omisiones'
           assert not re.search(r'\bskipped\b', log), 'Las integraciones reales no pueden omitirse'
           PYTHON
