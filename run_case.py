@@ -5,13 +5,11 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 import time
 from uuid import uuid4
 
 from case_config import CASES, reference_paths
-from process_environment import process_environment
 
 TIMEOUT_SECONDS = 30
 
@@ -25,10 +23,11 @@ def run_case(case_id, project_root):
     started_at = utc_timestamp()
     started_clock = time.monotonic()
     run_dir = None
-    stdout = b""
-    stderr = b""
+    evaluation_log = None
     errors = []
     result = {
+        "version_evaluacion": 2,
+        "proceso_pruebas": None,
         "caso": case_id,
         "inicio_utc": started_at.isoformat().replace("+00:00", "Z"),
         "fin_utc": None,
@@ -63,39 +62,52 @@ def run_case(case_id, project_root):
         shutil.copy2(required[1], workspace / "test_solution.py")
         shutil.copy2(contract, run_dir / "contrato.md")
 
+        # Imports diferidos: python_evaluator importa repair_case, que reutiliza
+        # TIMEOUT_SECONDS y utc_timestamp de este módulo, también en la CLI.
+        from python_evaluator import PYTHON, run_isolated, validate_isolation
+        from repair_case import ProcessInterrupted, ProcessRecordError, run_process
+
         command = [
-            sys.executable, "-B", "-m", "unittest", "discover",
+            PYTHON, "-B", "-m", "unittest", "discover",
             "-s", str(workspace), "-p", "test_solution.py", "-v",
         ]
         result["comando"] = command
         result["directorio_trabajo"] = str(workspace)
-        with process_environment() as environment:
-            completed = subprocess.run(
-                command,
-                cwd=workspace,
-                shell=False,
-                capture_output=True,
-                timeout=TIMEOUT_SECONDS,
-                check=False,
-                env=environment,
-            )
-        stdout = completed.stdout
-        stderr = completed.stderr
-        result["codigo_salida_pruebas"] = completed.returncode
-        result["estado"] = "finalizada"
-    except subprocess.TimeoutExpired as exc:
-        # El modo binario conserva también la salida parcial del proceso.
-        stdout = exc.stdout or b""
-        stderr = exc.stderr or b""
-        result["estado"] = "tiempo_agotado"
-    except OSError as exc:
+        # El volumen de salida no puede cubrir el padre del bind de workspace.
+        # Los canales se publican después en sus ubicaciones históricas.
+        evaluation_log = run_dir / "evaluacion"
+        try:
+            process = run_isolated(command, workspace, evaluation_log, TIMEOUT_SECONDS,
+                                   materials=(), runner=run_process)
+        except (ProcessInterrupted, ProcessRecordError) as exc:
+            result["proceso_pruebas"] = exc.result
+            raise OSError(str(exc)) from exc
+        result["proceso_pruebas"] = process
+        if process["estado"] == "tiempo_agotado":
+            result["estado"] = "tiempo_agotado"
+        elif process["estado"] == "finalizada" and process.get("error") is None:
+            validate_isolation(process, materials=(), log=evaluation_log)
+            if type(process["codigo_salida"]) is not int:
+                raise ValueError("Código de unittest ausente o inválido")
+            result["codigo_salida_pruebas"] = process["codigo_salida"]
+            result["estado"] = "finalizada"
+        else:
+            errors.append(process.get("error") or "La evaluación aislada no finalizó: " + process["estado"])
+    except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
         errors.append(str(exc))
 
     if run_dir is not None:
-        # Intentar guardar ambos canales aunque falle la escritura de uno.
-        for filename, content in (("stdout.txt", stdout), ("stderr.txt", stderr)):
+        # Mover, sin recapturar ni duplicar bytes: los presupuestos se aplicaron
+        # durante la escritura. Un error en un canal no impide publicar el otro.
+        for filename in ("stdout.txt", "stderr.txt"):
             try:
-                (run_dir / filename).write_bytes(content)
+                source = evaluation_log / filename if evaluation_log is not None else None
+                if source is not None and source.is_file():
+                    source.replace(run_dir / filename)
+                elif result["proceso_pruebas"] is not None:
+                    raise OSError("Falta el canal registrado por la evaluación aislada")
+                else:
+                    (run_dir / filename).touch()
             except OSError as exc:
                 result["estado"] = "error_ejecucion"
                 errors.append(f"No se pudo guardar {filename}: {exc}")

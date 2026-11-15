@@ -152,7 +152,10 @@ class TestProcessEnvironment(unittest.TestCase):
         (project / 'tasks' / run_case.CASES['case_01']).write_text('Contrato sintético')
         (benchmark / 'solution.py').write_text(probe_source())
         (benchmark / 'test_solution.py').write_bytes(self.benchmark_sources()[1])
-        with patch.dict(os.environ, self.host, clear=True), redirect_stdout(io.StringIO()):
+        from evaluator_stub import simulated
+        import python_evaluator
+        with patch.dict(os.environ, self.host, clear=True), redirect_stdout(io.StringIO()), \
+             patch.object(python_evaluator, 'run_isolated', simulated()):
             code = run_case.run_case('case_01', project)
         directory, = (project / 'runs').iterdir()
         result = json.loads((directory / 'resultado.json').read_text())

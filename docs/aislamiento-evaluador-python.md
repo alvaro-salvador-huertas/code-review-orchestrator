@@ -6,7 +6,8 @@ las etapas que ejecutan Python del proyecto: inventario dinámico de la base
 aceptación, regresión, hallazgos y anidamiento). Se aplica también a las tareas
 configurables y a las entregas con varios archivos. La CLI directa
 `repair_project.py inspect-json` también aísla sus cuatro evaluaciones:
-aceptación y regresión, tanto iniciales como posteriores.
+aceptación y regresión, tanto iniciales como posteriores. La CLI `run_case.py`
+también ejecuta el descubrimiento y unittest dentro de esta frontera.
 
 `unittest.discover()` importa módulos, ejecuta su inicialización y puede invocar
 `load_tests`; no basta con aislar los métodos de prueba. Por eso el proceso
@@ -83,6 +84,67 @@ sintético, valida las cuatro etapas con el lector y comprueba la ausencia de
 sus cuatro contenedores y cuatro volúmenes. Las pruebas comunes de la frontera
 siguen cubriendo red, señuelos, cuotas y timeout sin duplicarlas.
 
+## CLI directa run_case.py
+
+`python3 -B run_case.py case_01` y `case_02` conservan sus identificadores,
+argumentos, plazo de unittest de 30 s y resumen textual. Se copian los mismos
+tres materiales: `solution.py` y `test_solution.py` en `workspace/`, y el
+contrato como `contrato.md`. La extracción y copia no importan el candidato.
+`unittest discover`, incluida la importación de pruebas y solución, se ejecuta
+mediante `run_isolated()` con la imagen y controles comunes. Solo se monta
+`workspace/`, de solo lectura; el contrato y el resto del repositorio no entran
+en el contenedor. Una escritura del candidato sobre sus entradas recibe el
+error del filesystem; si unittest lo registra como error de prueba, conserva
+el significado de evaluación terminada, no de fallo de infraestructura.
+
+La CLI devuelve **0 si la evaluación terminó y se conservó su registro**, aunque
+unittest devolviera 1 por aserciones fallidas o errores de prueba. El código de
+unittest permanece en `codigo_salida_pruebas`; 0 de la CLI no significa pruebas
+superadas, autorización de reparación ni aprobación humana. Runtime ausente,
+arranque rechazado, protección inefectiva, cuota excedida o evidencia inválida
+producen **CLI 1**, `estado: error_ejecucion` y código de pruebas `null`.
+El código 125 del arranque del contenedor se conserva solo en el proceso bruto,
+no se atribuye a unittest. Timeout mantiene CLI 1, `tiempo_agotado`, código de
+pruebas `null`, canales parciales y diagnóstico de la frontera. Si unittest
+terminó pero falla la publicación de un canal o el JSON, la CLI devuelve 1;
+se conserva el código conocido de unittest, como antes.
+
+Los nuevos registros añaden `version_evaluacion: 2` y `proceso_pruebas`, que
+contiene la evidencia completa de `run_isolated()`. Se conserva el proceso
+bruto en `evaluacion/resultado.json`. Antes de declarar `finalizada` se valida
+su sello y comando Podman, incluidas cuotas, montajes y limpieza confirmada.
+La salida del contenedor usa el volumen acotado en `evaluacion/`, separado del
+bind de entrada: montar el volumen sobre el padre de `workspace/` solaparía
+los montajes. Los pipes acotados se publican después mediante `replace` como
+`stdout.txt` y `stderr.txt` en la raíz histórica del registro, sin recapturar ni
+duplicar sus bytes. Un canal ausente o que no se pueda publicar impide declarar
+el registro completo; se intenta publicar el otro canal y el resumen.
+
+Se conservan los campos anteriores (`caso`, tiempos, comando lógico,
+`directorio_trabajo`, `limite_segundos`, `estado`, `codigo_salida_pruebas`,
+`errores_controlador` y `politica_entorno`). No se obliga a reescribir registros
+anteriores ni se les añade aislamiento. No hay un lector exclusivo de estos
+registros simples: los consumidores del JSON y del informe textual mantienen
+su formato. La regresión histórica usa el lector JSON común de `inspect_run`
+y el clasificador `classify_test_report`, sin ejecutar Podman ni materiales,
+y conserva la clasificación de aserciones fallidas y el significado del código.
+No se amplía la CLI de consulta de registros generales a este formato simple.
+
+Los imports de la frontera y de `run_process` son diferidos dentro de
+`run_case()`: `python_evaluator` importa `repair_case`, que reutiliza las
+constantes y el reloj de `run_case`. Se prueban tres órdenes de importación en
+procesos nuevos, además de la CLI real, para evitar un ciclo de imports. No se
+migra `repair_case.evaluate()` ni los recorridos de reparación y revisión.
+
+La suite ordinaria sustituye la frontera solo en fixtures declarados; cubre
+códigos 0/1 de unittest, timeout, arranque/runtime fallidos sin ejecutar el
+candidato en el anfitrión, evidencia ausente y fallo de publicación. La nueva
+integración real número 12 invoca la CLI de producción con casos sintéticos:
+case_01 supera las pruebas y case_02 falla por aserción, ambos con CLI 0. Valida
+la procedencia, las entradas de solo lectura y la ausencia de cada contenedor
+y volumen por su nombre concreto. Red, cuotas y timeout siguen cubiertos por
+las integraciones compartidas, sin duplicarlas.
+
 ## Preparación separada de la evaluación
 
 Se necesita Linux, cgroups v2 con controladores de memoria, swap, CPU y procesos
@@ -129,7 +191,8 @@ y `pids.max`, además de `cpu.max` en ese mismo cgroup. La cuota de CPU debe
 ser finita y cumplir `0 < cuota <= periodo` antes de ejecutar el candidato.
 Una advertencia del runtime que implique límites ignorados no
 permite ejecutar el candidato. Runtime ausente, imagen ausente, arranque fallido
-o controles inefectivos detienen el flujo con código 3 y diagnóstico; nunca se
+o controles inefectivos detienen los recorridos de proyectos con código 3 y
+diagnóstico (la CLI simple `run_case.py` conserva el código 1); nunca se
 invoca Python del candidato en el anfitrión como alternativa.
 
 ## Controles y materiales
@@ -203,7 +266,7 @@ marcador de ejecución en el anfitrión y una importación hostil durante el
 inventario. En ambos puntos el controlador se detiene antes de ejecutar el
 proyecto cuando no puede aplicar el aislamiento.
 
-Las once integraciones opt-in usan Podman real, sin sustituirlo: recorrido
+Las doce integraciones opt-in usan Podman real, sin sustituirlo: recorrido
 completo de un candidato válido con agentes sintéticos; señuelo fuera de
 montajes y destino TCP loopback controlado con datos sintéticos; timeout con
 hijo y comprobación de ausencia del contenedor y del proceso; inventario con
@@ -211,7 +274,8 @@ importación que intentaría escribir fuera de los montajes; HOME temporal con
 un montaje automático sintético que el evaluador debe bloquear; excesos separados
 de resultados, stdout y stderr; exceso agregado entre varios archivos; e informe
 normal con cuotas pequeñas; y la CLI directa `repair_project.py` con cuatro
-evaluaciones, lectura de su evidencia y agente simulado. Cuando se habilitan,
+evaluaciones, lectura de su evidencia y agente simulado; y la CLI directa
+`run_case.py` con códigos de unittest 0 y 1. Cuando se habilitan,
 un runtime roto produce **fallos**, no skips silenciosos.
 
 ### Integración real en GitHub Actions
@@ -265,7 +329,7 @@ CRO_REAL_PODMAN=1 python3 -B -m unittest discover \
 Las versiones de los paquetes del runner pueden avanzar con las actualizaciones
 de Ubuntu; se registran para diagnóstico, mientras que las acciones y la imagen
 Python quedan fijadas. Una repetición debe cumplir la misma sonda efectiva.
-La salida de unittest debe indicar exactamente **11 pruebas, OK y cero
+La salida de unittest debe indicar exactamente **12 pruebas, OK y cero
 omisiones**. El pipe de registro conserva los errores de unittest mediante
 `pipefail`; una omisión o un cambio de recuento también hace fallar el job.
 
@@ -716,12 +780,13 @@ se guarda únicamente en un commit local, sin publicarlo.
 
 No se aíslan las invocaciones directas de `project_test_runner.py`, `project_flow_runner.py`, `project_test_inventory.py`,
 los evaluadores `evals/**/evaluar.py`, ni los recorridos de casos
-`run_case.py`, `repair_case.py`, `orchestrate_case.py` y `evaluate_reviewer.py`.
+`repair_case.py`, `orchestrate_case.py`, `review_case.py` y `evaluate_reviewer.py`.
 Tampoco la ejecución manual de `unittest`/scripts ni los agentes de desarrollo y
 revisión, que conservan su política Codex. Los lectores y planificadores no
 pasan a ejecutar candidatos por este cambio. La protección aquí descrita se
 aplica al inventario y evaluación iniciados desde `orchestrate_project.py`
-y a las cuatro evaluaciones de `repair_project.py inspect-json`.
+a las cuatro evaluaciones de `repair_project.py inspect-json` y a unittest
+iniciado por `run_case.py`.
 
 Referencias: [Podman run](https://docs.podman.io/en/latest/markdown/podman-run.1.html),
 [preparación rootless](https://github.com/podman-container-tools/podman/blob/main/docs/tutorials/rootless_tutorial.md),
