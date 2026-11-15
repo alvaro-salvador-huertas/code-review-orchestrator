@@ -139,7 +139,10 @@ class TestProcessEnvironment(unittest.TestCase):
         # El candidato lleva su propia sonda; no importa nada del proceso controlador.
         solution, tests = probe_source().encode(), self.benchmark_sources()[1]
         log = self.root / 'benchmark'
-        with patch.dict(os.environ, self.host, clear=True):
+        from evaluator_stub import simulated
+        import python_evaluator
+        with patch.dict(os.environ, self.host, clear=True), \
+             patch.object(python_evaluator, 'run_isolated', simulated()):
             result = repair_case.evaluate(solution, tests, log)
         self.assertEqual(result['codigo_salida'], 0)
         self.assert_clean_logs(log)

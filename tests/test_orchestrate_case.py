@@ -50,6 +50,8 @@ class OrchestrationFixture:
         self.history = snapshot_tree(self.historical)
         self.fake = self.temporary / "codex simulado"
         self.calls = self.temporary / "calls.jsonl"
+        from evaluator_stub import install_case
+        install_case(self, self.project)
 
     def configure(self, developers, reviewers):
         self.calls.unlink(missing_ok=True)

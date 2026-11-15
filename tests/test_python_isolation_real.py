@@ -8,6 +8,7 @@ import os
 import json
 from pathlib import Path
 import socket
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -80,6 +81,51 @@ except OSError:
                 sandbox.check_isolated_process(result)
             self.assertEqual(stopped.exception.code, 3)
             self.assertEqual(stopped.exception.state, 'fallo_tecnico')
+
+    def test_13_repair_case_cli_evaluaciones_y_lector_reales(self):
+        import repair_case
+        import review_case
+        from test_repair_case import TestRepairCase
+        fixture = TestRepairCase()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        source = Path(sandbox.__file__).parent
+        # Sustituir todos los módulos privados por producción, sin el stub.
+        for name in ('repair_case.py','run_case.py','case_config.py','case_evidence.py',
+                     'process_environment.py','python_evaluator.py','bounded_output.py'):
+            (fixture.project/name).write_bytes((source/name).read_bytes())
+        tools = fixture.temporary/'bin'; tools.mkdir()
+        shutil.copy2(fixture.fake,tools/'codex')
+        completed = subprocess.run([sys.executable,'-B',str(fixture.project/'repair_case.py'),'case_02'],
+            cwd=fixture.temporary,
+            env={**os.environ,'PATH':str(tools)+os.pathsep+os.environ.get('PATH','')},
+            capture_output=True,text=True,timeout=120)
+        self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+        self.assertEqual(completed.stderr,'')
+        log,result = fixture.record()
+        self.assertEqual(result['estado'],'supera_las_pruebas_disponibles')
+        self.assertTrue(result['aceptada'])
+        self.assertEqual(result['version_evaluacion'],2)
+        self.assertEqual(result['agente']['invocaciones'],1)
+        self.assertEqual(len(fixture.agent_calls()),1)
+        fixture.assert_originals()
+        containers,volumes = set(),set()
+        for phase,key,code in (('inicial','pruebas_iniciales',1),('posterior','pruebas_posteriores',0)):
+            item = result[key]
+            self.assertEqual(item,json.loads((log/phase/'resultado.json').read_text()))
+            self.assertEqual((item['estado'],item['codigo_salida']),('finalizada',code))
+            self.assertTrue(item['pruebas_intactas'] and item['implementacion_intacta'])
+            repair_case.validate_evaluation(item,log/phase)
+            self.assertIn('salida de pruebas',(log/phase/'stdout.txt').read_text())
+            self.assertIn('Ran 1 test',(log/phase/'stderr.txt').read_text())
+            stamp = item['aislamiento']
+            containers.add(stamp['contenedor']); volumes.add(stamp['volumen_resultados'])
+            self.assertTrue(stamp['limpieza_confirmada'])
+            self.assertEqual(sandbox.runtime_call(['container','exists',stamp['contenedor']]).returncode,1)
+            self.assertEqual(sandbox.runtime_call(['volume','exists',stamp['volumen_resultados']]).returncode,1)
+        self.assertEqual((len(containers),len(volumes)),(2,2))
+        materials,_ = review_case.validate_repair(log,fixture.project)
+        self.assertEqual(materials['candidato.py'],b'VALOR = 7\n')
 
     def test_12_run_case_cli_conserva_codigos_y_registra_aislamiento(self):
         import run_case

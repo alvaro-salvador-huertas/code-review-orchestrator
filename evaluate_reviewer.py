@@ -27,10 +27,11 @@ CANDIDATES = (
     ("candidato_01", "case_01"), ("candidato_02", "case_01"),
     ("candidato_03", "case_02"), ("candidato_04", "case_02"),
 )
-RUNTIME_FILES = (
+LEGACY_RUNTIME_FILES = (
     "evaluate_reviewer.py", "review_case.py", "repair_case.py",
     "run_case.py", "case_config.py", "case_evidence.py", "process_environment.py",
 )
+RUNTIME_FILES = (*LEGACY_RUNTIME_FILES, "python_evaluator.py", "bounded_output.py")
 ORIGIN = "candidatos_preparados_para_evaluacion"
 
 
@@ -75,8 +76,14 @@ def inputs_for(root, candidate_id, case_id):
     }
 
 
-def source_paths(root):
-    paths = set(RUNTIME_FILES)
+def runtime_files(version):
+    require(type(version) is int and version in (1, repair_case.EVALUATION_VERSION),
+            "Versión de evaluación desconocida")
+    return RUNTIME_FILES if version == repair_case.EVALUATION_VERSION else LEGACY_RUNTIME_FILES
+
+
+def source_paths(root, *, version=repair_case.EVALUATION_VERSION):
+    paths = set(runtime_files(version))
     for candidate_id, case_id in CANDIDATES:
         paths.update(inputs_for(root, candidate_id, case_id).values())
     return sorted(paths)
@@ -131,8 +138,9 @@ def record_git(root, destination, paths):
     })
 
 
-def verify_evaluation(directory, candidate, tests, case_id):
+def verify_evaluation(directory, candidate, tests, case_id, *, version=1):
     result = parse_json(required_bytes(directory / "resultado.json"))
+    repair_case.validate_evaluation(result, directory, version=version, relocated=True)
     require(result["estado"] == "finalizada" and type(result["codigo_salida"]) is int
             and result["codigo_salida"] == 0, "Las pruebas originales no terminaron correctamente")
     require(result["pruebas_intactas"] is True and result["implementacion_intacta"] is True,
@@ -149,7 +157,7 @@ def verify_evaluation(directory, candidate, tests, case_id):
 def prepare(root=PROJECT, *, progress=None):
     root = Path(root).resolve()
     started = time.monotonic()
-    result = {"version": 1, "procedencia": ORIGIN, "experimento": None,
+    result = {"version": 1, "version_evaluacion": repair_case.EVALUATION_VERSION, "procedencia": ORIGIN, "experimento": None,
               "estado": "en_preparacion", "codigo_salida": 1, "error": None,
               "inicio_utc": repair_case.timestamp(), "orden": list(map(list, CANDIDATES)),
               "configuracion_solicitada": requested_configuration(), "sha256": {}}
@@ -186,7 +194,8 @@ def prepare(root=PROJECT, *, progress=None):
                 finally:
                     if evaluation.exists():
                         shutil.copytree(evaluation, saved, symlinks=True)
-            verify_evaluation(saved, inputs["candidato.py"], inputs["test_solution.py"], case_id)
+            verify_evaluation(saved, inputs["candidato.py"], inputs["test_solution.py"], case_id,
+                              version=repair_case.EVALUATION_VERSION)
         result["sha256"] = snapshot_tree(frozen)
         result.update(estado="preparada", codigo_salida=0)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, KeyboardInterrupt) as exc:
@@ -211,18 +220,20 @@ def validate_preparation(experiment, root):
     require(result["orden"] == list(map(list, CANDIDATES)), "Orden de candidatos alterado")
     require(result["configuracion_solicitada"] == requested_configuration(),
             "La configuración solicitada cambió desde la preparación")
+    version = result.get("version_evaluacion", 1)
+    runtime_files(version)
     frozen = experiment / "preparacion"
     require(snapshot_tree(frozen) == result["sha256"], "Hashes de la preparación alterados")
-    require(snapshot_tree(frozen / "fuentes").keys() == set(source_paths(root)),
+    require(snapshot_tree(frozen / "fuentes").keys() == set(source_paths(root, version=version)),
             "Fuentes incompletas o materiales no permitidos")
-    for name in RUNTIME_FILES:
+    for name in runtime_files(version):
         require(required_bytes(root / name) == required_bytes(frozen / "fuentes" / name),
                 f"El código del lanzador cambió desde la preparación: {name}")
     for candidate_id, case_id in CANDIDATES:
         sources = inputs_for(root, candidate_id, case_id)
         verify_evaluation(frozen / "evaluaciones" / candidate_id,
                           required_bytes(frozen / "fuentes" / sources["candidato.py"]),
-                          required_bytes(frozen / "fuentes" / sources["test_solution.py"]), case_id)
+                          required_bytes(frozen / "fuentes" / sources["test_solution.py"]), case_id, version=version)
     return result, digest(raw)
 
 
@@ -358,7 +369,7 @@ def run_experiment(experiment, root=PROJECT, *, progress=None):
                     "El manifiesto cambió durante el lanzamiento")
             require(snapshot_matches(experiment / "preparacion", prepared["sha256"]),
                     "La preparación cambió durante el lanzamiento")
-            for name in RUNTIME_FILES:
+            for name in runtime_files(prepared.get("version_evaluacion", 1)):
                 require(required_bytes(root / name) == required_bytes(experiment / "preparacion/fuentes" / name),
                         f"Código del lanzador alterado: {name}")
             require(all(snapshot_matches(launch / name, hashes) for name, hashes in records.items()),

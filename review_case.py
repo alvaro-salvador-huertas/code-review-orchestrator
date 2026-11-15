@@ -12,7 +12,7 @@ from uuid import uuid4
 from repair_case import (
     AGENT_TIMEOUT_SECONDS, PREFLIGHT_TIMEOUT_SECONDS, digest, inventory,
     read_regular, run_process, timestamp, write_json,
-    ProcessRecordError,
+    ProcessRecordError, validate_evaluation, EVALUATION_VERSION,
 )
 from run_case import utc_timestamp
 from case_config import get_case, reference_paths, reviewer_prompt_path
@@ -68,6 +68,12 @@ def validate_repair(run_dir, project_root, *, allow_test_failure=False, expected
 
     try:
         result = parse_json(read("resultado.json"))
+        evaluation_version = result.get("version_evaluacion", 1)
+        require(type(evaluation_version) is int and evaluation_version in (1, EVALUATION_VERSION),
+                "Versión de procedencia de evaluación desconocida")
+        if evaluation_version == EVALUATION_VERSION:
+            require(type(result.get("version_registro")) is int and result["version_registro"] == 2,
+                    "Falta procedencia de continuidad nueva")
         case_id = result["caso"]
         sources = reference_paths(project_root, case_id)
         require(expected_case is None or case_id == expected_case,
@@ -134,6 +140,8 @@ def validate_repair(run_dir, project_root, *, allow_test_failure=False, expected
         ):
             phase_result = parse_json(read(phase + "/resultado.json"))
             require(phase_result == result[key], f"Resumen de pruebas inconsistente: {phase}")
+            raw = read(phase + "/evaluacion/resultado.json") if evaluation_version == EVALUATION_VERSION else None
+            validate_evaluation(phase_result, run_dir / phase, version=evaluation_version, raw_process=raw)
             require(phase_result["estado"] in ("finalizada", "tiempo_agotado")
                     and type(phase_result["codigo_salida"]) is int
                     and phase_result["pruebas_intactas"] is True
