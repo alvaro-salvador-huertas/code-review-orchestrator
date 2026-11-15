@@ -8,9 +8,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import ANY, patch
+from unittest.mock import patch
 
 import run_case
+import python_evaluator as sandbox
+from evaluator_stub import simulated, STUB
+
+REAL_RUN_ISOLATED = sandbox.run_isolated
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class TestRunCase(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix=".test-run-case-", dir=PROJECT_ROOT)
+        temporary = tempfile.TemporaryDirectory(prefix="test-run-case-")
         self.addCleanup(temporary.cleanup)
         self.temporary = Path(temporary.name)
         self.project = self.temporary / "proyecto con espacios"
@@ -33,8 +37,15 @@ class TestRunCase(unittest.TestCase):
             )
             self.write_test(case_id=case_id)
         self.script = self.project / "run_case.py"
-        for name in ("run_case.py", "case_config.py", "case_evidence.py", "process_environment.py"):
+        for name in ("run_case.py", "case_config.py", "case_evidence.py", "process_environment.py",
+                     "python_evaluator.py", "bounded_output.py", "repair_case.py"):
             shutil.copy2(PROJECT_ROOT / name, self.project / name)
+        # Solo fixtures: la CLI privada y las llamadas directas simulan Podman.
+        target = self.project / 'python_evaluator.py'
+        target.write_text(target.read_text() + '\n' + STUB)
+        substitute = patch.object(sandbox, 'run_isolated', simulated())
+        substitute.start()
+        self.addCleanup(substitute.stop)
 
     def write_test(self, body="self.assertEqual(VALOR, 7)", case_id="case_01"):
         content = (
@@ -76,6 +87,10 @@ class TestRunCase(unittest.TestCase):
         self.assertEqual(result["codigo_salida_pruebas"], 0)
         self.assertEqual(result["caso"], "case_01")
         self.assertEqual(result["errores_controlador"], [])
+        self.assertEqual(result['version_evaluacion'], 2)
+        self.assertEqual(result['proceso_pruebas'], json.loads((directory/'evaluacion/resultado.json').read_text()))
+        self.assertEqual(result['proceso_pruebas']['comando'], result['comando'])
+        sandbox.validate_isolation(result['proceso_pruebas'], materials=(), log=directory/'evaluacion')
         self.assertEqual(result["limite_segundos"], 30)
         start = datetime.fromisoformat(result["inicio_utc"].replace("Z", "+00:00"))
         end = datetime.fromisoformat(result["fin_utc"].replace("Z", "+00:00"))
@@ -84,7 +99,7 @@ class TestRunCase(unittest.TestCase):
         self.assertGreaterEqual(end, start)
         self.assertGreaterEqual(result["duracion_segundos"], 0)
         self.assertEqual(result["directorio_trabajo"], str(directory / "workspace"))
-        self.assertEqual(result["comando"][0], sys.executable)
+        self.assertEqual(result["comando"][0], sandbox.PYTHON)
         self.assertIn("-B", result["comando"])
         self.assertIn(str(directory / "workspace"), result["comando"])
         self.assertEqual((directory / "stdout.txt").read_bytes(), b"salida del proceso\n")
@@ -133,54 +148,173 @@ class TestRunCase(unittest.TestCase):
             "FAILED (errors=1)", (directory / "stderr.txt").read_text(encoding="utf-8")
         )
 
+    def recorded_failure(self, *, state='tiempo_agotado', error=None, stdout=b'', stderr=b''):
+        def run(command, workspace, log, timeout, **kwargs):
+            log.mkdir()
+            (log/'stdout.txt').write_bytes(stdout)
+            (log/'stderr.txt').write_bytes(stderr)
+            result = {'comando':command, 'directorio_trabajo':str(workspace),
+                      'estado':state, 'codigo_salida':None, 'error':error}
+            (log/'resultado.json').write_text(json.dumps(result))
+            return result
+        return run
+
     def test_tiempo_agotado_conserva_salida_parcial(self):
-        timeout = subprocess.TimeoutExpired(
-            cmd=["python"], timeout=30, output=b"salida parcial\n", stderr=b"error parcial\n"
-        )
-        with patch("run_case.subprocess.run", side_effect=timeout) as process:
+        fake = self.recorded_failure(stdout=b'salida parcial\n', stderr=b'error parcial\n')
+        with patch.object(sandbox, 'run_isolated', side_effect=fake) as process:
             code, output, errors = self.execute()
         directory, result = self.record()
-
         self.assertEqual(code, 1)
-        self.assertEqual(errors, "")
-        self.assertEqual(result["estado"], "tiempo_agotado")
-        self.assertIsNone(result["codigo_salida_pruebas"])
-        self.assertEqual((directory / "stdout.txt").read_bytes(), b"salida parcial\n")
-        self.assertEqual((directory / "stderr.txt").read_bytes(), b"error parcial\n")
-        self.assertIn("Estado: tiempo_agotado", output)
-        self.assertIn("Código de salida de las pruebas: null", output)
-        process.assert_called_once_with(
-            result["comando"], cwd=directory / "workspace", shell=False,
-            capture_output=True, timeout=30, check=False, env=ANY,
-        )
+        self.assertEqual(errors, '')
+        self.assertEqual(result['estado'], 'tiempo_agotado')
+        self.assertIsNone(result['codigo_salida_pruebas'])
+        self.assertEqual((directory/'stdout.txt').read_bytes(), b'salida parcial\n')
+        self.assertEqual((directory/'stderr.txt').read_bytes(), b'error parcial\n')
+        self.assertIn('Estado: tiempo_agotado', output)
+        self.assertIn('Código de salida de las pruebas: null', output)
+        self.assertEqual(process.call_args.args, (result['comando'],directory/'workspace',directory/'evaluacion',30))
+        self.assertEqual(process.call_args.kwargs['materials'], ())
 
     def test_tiempo_agotado_sin_salida(self):
-        with patch(
-            "run_case.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["python"], timeout=30),
-        ):
+        with patch.object(sandbox, 'run_isolated', side_effect=self.recorded_failure()):
             code, _, _ = self.execute()
         directory, result = self.record()
-
         self.assertEqual(code, 1)
-        self.assertEqual(result["estado"], "tiempo_agotado")
-        self.assertIsNone(result["codigo_salida_pruebas"])
-        self.assertEqual((directory / "stdout.txt").read_bytes(), b"")
-        self.assertEqual((directory / "stderr.txt").read_bytes(), b"")
+        self.assertEqual(result['estado'], 'tiempo_agotado')
+        self.assertIsNone(result['codigo_salida_pruebas'])
+        self.assertEqual((directory/'stdout.txt').read_bytes(), b'')
+        self.assertEqual((directory/'stderr.txt').read_bytes(), b'')
 
     def test_error_al_iniciar_proceso(self):
-        with patch("run_case.subprocess.run", side_effect=OSError("no se pudo iniciar")):
+        with patch.object(sandbox, 'run_isolated', side_effect=OSError('no se pudo iniciar')):
             code, output, errors = self.execute()
         directory, result = self.record()
-
         self.assertEqual(code, 1)
-        self.assertEqual(result["estado"], "error_ejecucion")
-        self.assertIsNone(result["codigo_salida_pruebas"])
-        self.assertIn("no se pudo iniciar", result["errores_controlador"][0])
-        self.assertEqual((directory / "stdout.txt").read_bytes(), b"")
-        self.assertEqual((directory / "stderr.txt").read_bytes(), b"")
-        self.assertIn("Estado: error_ejecucion", output)
-        self.assertIn("no se pudo iniciar", errors)
+        self.assertEqual(result['estado'], 'error_ejecucion')
+        self.assertIsNone(result['codigo_salida_pruebas'])
+        self.assertIn('no se pudo iniciar', result['errores_controlador'][0])
+        self.assertEqual((directory/'stdout.txt').read_bytes(), b'')
+        self.assertEqual((directory/'stderr.txt').read_bytes(), b'')
+        self.assertIn('Estado: error_ejecucion', output)
+        self.assertIn('no se pudo iniciar', errors)
+
+    def test_runtime_ausente_no_ejecuta_descubrimiento_en_anfitrion(self):
+        marker = self.temporary/'NO_EJECUTADO_EN_HOST'
+        path = self.project/'benchmark/case_01/test_solution.py'
+        path.write_text(f'from pathlib import Path\nPath({str(marker)!r}).touch()\n'+path.read_text())
+        with patch.object(sandbox, 'run_isolated', REAL_RUN_ISOLATED), \
+             patch.object(sandbox, 'require_runtime', side_effect=RuntimeError('RUNTIME_AUSENTE')):
+            code, output, errors = self.execute()
+        directory, result = self.record()
+        self.assertEqual(code, 1)
+        self.assertEqual(result['estado'], 'error_ejecucion')
+        self.assertIsNone(result['codigo_salida_pruebas'])
+        self.assertIn('RUNTIME_AUSENTE', errors)
+        self.assertFalse(marker.exists())
+        self.assertIn('RUNTIME_AUSENTE', (directory/'stderr.txt').read_text())
+        self.assertEqual(result['proceso_pruebas']['estado'], 'error_inicio')
+
+    def test_arranque_rechazado_no_es_codigo_de_unittest(self):
+        clean = {'estado_inicial':'presente', 'estado_final':'ausente',
+                 'ausente_confirmado':True, 'errores':[]}
+        with patch.object(sandbox, 'run_isolated', REAL_RUN_ISOLATED), \
+             patch.object(sandbox, 'require_runtime'), \
+             patch.object(sandbox, 'prepare_result_volume', return_value='/tmp/volumen-simulado'), \
+             patch.object(sandbox, 'cleanup'), \
+             patch.object(sandbox, 'cleanup_result_volume', return_value=clean), \
+             patch.object(sandbox, 'result_volume_usage', return_value={'excedido':False}), \
+             patch('repair_case.run_process', return_value={'estado':'finalizada', 'codigo_salida':125, 'error':None}) as runner:
+            code, _, errors = self.execute()
+        _, result = self.record()
+        self.assertEqual((code, result['estado']), (1, 'error_ejecucion'))
+        self.assertIsNone(result['codigo_salida_pruebas'])
+        self.assertEqual(result['proceso_pruebas']['codigo_salida'], 125)
+        self.assertIn('no pudo iniciar', errors)
+        self.assertEqual(runner.call_count, 1)
+        self.assertEqual(runner.call_args.args[0][0], 'podman')
+
+    def test_cuota_o_evidencia_ausente_no_se_registran_como_unittest_finalizado(self):
+        substitute = simulated()
+        for fault in ('cuota', 'aislamiento'):
+            def invalid(command, workspace, log, timeout, **kwargs):
+                process = substitute(command, workspace, log, timeout, **kwargs)
+                if fault == 'cuota':
+                    process.update(estado='limite_salida', error='Límite sintético de stdout')
+                else:
+                    process.pop('aislamiento')
+                (log/'resultado.json').write_text(json.dumps(process))
+                return process
+            with self.subTest(fallo=fault), patch.object(sandbox, 'run_isolated', invalid):
+                code, output, errors = self.execute()
+                self.assertEqual(code, 1)
+                self.assertIn('Estado: error_ejecucion', output)
+                self.assertIn('Código de salida de las pruebas: null', output)
+                self.assertTrue(errors)
+
+    def test_canal_ausente_no_permite_acreditar_registro_completo(self):
+        substitute = simulated()
+        def missing(command, workspace, log, timeout, **kwargs):
+            process = substitute(command, workspace, log, timeout, **kwargs)
+            (log/'stdout.txt').unlink()
+            return process
+        with patch.object(sandbox, 'run_isolated', missing):
+            code, output, errors = self.execute()
+        directory, result = self.record()
+        self.assertEqual((code, result['estado']), (1, 'error_ejecucion'))
+        self.assertEqual(result['codigo_salida_pruebas'], 0)
+        self.assertIn('stdout.txt', errors)
+        self.assertIn('OK', (directory/'stderr.txt').read_text())
+        self.assertFalse((directory/'stdout.txt').exists())
+
+    def test_cli_runtime_ausente_registra_fallo_sin_traceback(self):
+        target = self.project/'python_evaluator.py'
+        target.write_text((PROJECT_ROOT/'python_evaluator.py').read_text()+
+            "\ndef require_runtime():\n    raise RuntimeError('RUNTIME_CLI_AUSENTE')\n")
+        completed = subprocess.run([sys.executable, '-B', str(self.script), 'case_01'],
+            cwd=self.temporary, capture_output=True, text=True, timeout=15)
+        directory, result = self.record()
+        self.assertEqual(completed.returncode, 1)
+        self.assertNotIn('Traceback', completed.stderr)
+        self.assertIn('RUNTIME_CLI_AUSENTE', completed.stderr)
+        self.assertEqual(result['estado'], 'error_ejecucion')
+        self.assertIsNone(result['codigo_salida_pruebas'])
+        self.assertIn('RUNTIME_CLI_AUSENTE', (directory/'stderr.txt').read_text())
+
+    def test_imports_en_frio_no_introducen_ciclo_ni_runtime(self):
+        for order in (('run_case','repair_case','python_evaluator'),
+                      ('repair_case','python_evaluator','run_case'),
+                      ('python_evaluator','run_case','repair_case')):
+            code = '; '.join('import '+name for name in order)
+            completed = subprocess.run([sys.executable, '-B', '-c', code],
+                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=10)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_registro_historico_con_aserciones_sigue_siendo_consultable(self):
+        import inspect_run
+        from case_evidence import classify_test_report
+        historical = self.temporary/'historico'; historical.mkdir()
+        old = {'caso':'case_01', 'estado':'finalizada', 'codigo_salida_pruebas':1,
+               'comando':['/interprete/historico', '-B', '-m', 'unittest'],
+               'directorio_trabajo':'/copia/historica', 'limite_segundos':30,
+               'errores_controlador':[], 'politica_entorno':'evaluation'}
+        path = historical/'resultado.json'; path.write_text(json.dumps(old))
+        reference = 'import unittest\nclass Historicas(unittest.TestCase):\n    def test_a(self): pass\n'
+        report = ('test_a (test_solution.Historicas.test_a) ... FAIL\n\n'
+                  '======================================================================\n'
+                  'FAIL: test_a (test_solution.Historicas.test_a)\n'
+                  '----------------------------------------------------------------------\n'
+                  'Traceback (most recent call last):\nAssertionError: dato sintético\n\n'
+                  '----------------------------------------------------------------------\n'
+                  'Ran 1 test in 0.001s\n\nFAILED (failures=1)\n')
+        before = path.read_bytes(); issues = []
+        with patch.object(sandbox, 'runtime_call', side_effect=AssertionError('No ejecutar Podman al leer')):
+            read = inspect_run.read_summary(path, issues)
+            self.assertEqual(classify_test_report(reference, report, read['codigo_salida_pruebas']), 'fallos_asercion')
+        self.assertEqual(read, old)
+        self.assertEqual(issues, [])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertNotIn('version_evaluacion', read)
+        self.assertNotIn('proceso_pruebas', read)
 
     def test_originales_intactos_y_registros_diferentes(self):
         self.write_test(body="Path('solution.py').write_text('# cambio en la copia\\n')")
@@ -214,7 +348,7 @@ class TestRunCase(unittest.TestCase):
             with self.subTest(archivo=path.name):
                 original = path.read_bytes()
                 path.unlink()
-                with patch("run_case.subprocess.run") as process:
+                with patch.object(sandbox, 'run_isolated') as process:
                     code, output, errors = self.execute()
                 path.write_bytes(original)
 
@@ -227,7 +361,7 @@ class TestRunCase(unittest.TestCase):
 
     def test_error_al_crear_registro_no_lanza_pruebas(self):
         (self.project / "runs").write_text("ocupado", encoding="utf-8")
-        with patch("run_case.subprocess.run") as process:
+        with patch.object(sandbox, 'run_isolated') as process:
             code, output, errors = self.execute()
 
         self.assertEqual(code, 1)
@@ -238,7 +372,7 @@ class TestRunCase(unittest.TestCase):
 
     def test_error_al_copiar_no_lanza_pruebas(self):
         with patch("run_case.shutil.copy2", side_effect=OSError("copia fallida")):
-            with patch("run_case.subprocess.run") as process:
+            with patch.object(sandbox, 'run_isolated') as process:
                 code, _, _ = self.execute()
         _, result = self.record()
 
@@ -249,14 +383,14 @@ class TestRunCase(unittest.TestCase):
         self.assertIn("copia fallida", result["errores_controlador"][0])
 
     def test_error_al_guardar_salida_conserva_el_otro_canal(self):
-        write_bytes = Path.write_bytes
+        replace = Path.replace
 
-        def fail_stdout(path, content):
+        def fail_stdout(path, target):
             if path.name == "stdout.txt":
                 raise OSError("escritura fallida")
-            return write_bytes(path, content)
+            return replace(path, target)
 
-        with patch.object(Path, "write_bytes", fail_stdout):
+        with patch.object(Path, "replace", fail_stdout):
             code, output, errors = self.execute()
         directory, result = self.record()
 
@@ -269,7 +403,12 @@ class TestRunCase(unittest.TestCase):
         self.assertIn("stdout.txt", result["errores_controlador"][0])
 
     def test_error_al_guardar_json_conserva_salidas_y_devuelve_error(self):
-        with patch.object(Path, "write_text", side_effect=OSError("registro fallido")):
+        original = Path.write_text
+        def fail_json(path, *args, **kwargs):
+            if path.name == 'resultado.json' and path.parent.parent == self.project/'runs':
+                raise OSError('registro fallido')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'write_text', fail_json):
             code, output, errors = self.execute()
         directories = list((self.project / "runs").iterdir())
 

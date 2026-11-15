@@ -81,6 +81,62 @@ except OSError:
             self.assertEqual(stopped.exception.code, 3)
             self.assertEqual(stopped.exception.state, 'fallo_tecnico')
 
+    def test_12_run_case_cli_conserva_codigos_y_registra_aislamiento(self):
+        import run_case
+        from case_evidence import classify_test_report
+        source = Path(sandbox.__file__).parent
+        with tempfile.TemporaryDirectory(prefix='real-run-case-') as temporary:
+            root = Path(temporary)
+            project = root/'proyecto con espacios'; project.mkdir()
+            (project/'tasks').mkdir()
+            for name in ('run_case.py', 'case_config.py', 'case_evidence.py', 'process_environment.py',
+                         'python_evaluator.py', 'bounded_output.py', 'repair_case.py'):
+                (project/name).write_bytes((source/name).read_bytes())
+            for case_id, test_code in (('case_01',0), ('case_02',1)):
+                with self.subTest(caso=case_id, codigo_unittest=test_code):
+                    benchmark = project/'benchmark'/case_id; benchmark.mkdir(parents=True)
+                    (project/'tasks'/run_case.CASES[case_id]).write_text('Contrato sintético sin modelos')
+                    (benchmark/'solution.py').write_text('VALOR = 7\n')
+                    tests = ('from pathlib import Path\nimport unittest\nfrom solution import VALOR\n'
+                        'class TestExample(unittest.TestCase):\n'
+                        '    def test_contract(self):\n'
+                        '        print("DESCUBRIMIENTO_Y_PRUEBA_EN_CONTENEDOR", flush=True)\n'
+                        '        with self.assertRaises(OSError):\n'
+                        '            Path("solution.py").write_text("NO_DEBE_ESCRIBIRSE")\n'
+                        f'        self.assertEqual(VALOR, {7 if test_code == 0 else 8})\n'
+                        'if __name__ == "__main__": unittest.main()\n')
+                    (benchmark/'test_solution.py').write_text(tests)
+                    completed = subprocess.run([sys.executable, '-B', str(project/'run_case.py'), case_id],
+                        cwd=root, capture_output=True, text=True, timeout=90)
+                    self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                    self.assertEqual(completed.stderr, '')
+                    logs = list((project/'runs').glob('*_'+case_id+'_*'))
+                    self.assertEqual(len(logs), 1)
+                    log = logs[0]
+                    result = json.loads((log/'resultado.json').read_text())
+                    self.assertEqual(result['estado'], 'finalizada')
+                    self.assertEqual(result['caso'], case_id)
+                    self.assertEqual(result['codigo_salida_pruebas'], test_code)
+                    self.assertEqual(result['version_evaluacion'], 2)
+                    self.assertEqual(result['errores_controlador'], [])
+                    self.assertEqual(result['limite_segundos'], 30)
+                    process = result['proceso_pruebas']
+                    self.assertEqual(process, json.loads((log/'evaluacion/resultado.json').read_text()))
+                    self.assertEqual((process['estado'], process['codigo_salida']), ('finalizada',test_code))
+                    self.assertEqual(process['comando'], result['comando'])
+                    self.assertEqual(process['directorio_trabajo'], str(log/'workspace'))
+                    sandbox.validate_isolation(process, materials=(), log=log/'evaluacion')
+                    stderr = (log/'stderr.txt').read_text()
+                    self.assertEqual(classify_test_report(tests, stderr, test_code),
+                                     'superadas' if test_code == 0 else 'fallos_asercion')
+                    self.assertIn('DESCUBRIMIENTO_Y_PRUEBA_EN_CONTENEDOR', (log/'stdout.txt').read_text())
+                    for name in ('solution.py','test_solution.py'):
+                        self.assertEqual((log/'workspace'/name).read_bytes(), (benchmark/name).read_bytes())
+                    stamp = process['aislamiento']
+                    self.assertTrue(stamp['limpieza_confirmada'])
+                    self.assertEqual(sandbox.runtime_call(['container','exists',stamp['contenedor']]).returncode, 1)
+                    self.assertEqual(sandbox.runtime_call(['volume','exists',stamp['volumen_resultados']]).returncode, 1)
+
     def test_11_repair_project_cli_cuatro_evaluaciones_aisladas(self):
         import repair_project
         import review_project
