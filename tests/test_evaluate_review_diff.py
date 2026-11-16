@@ -20,15 +20,30 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.parent = Path(temporary.name)
         self.experiment = self.parent / "experiment"
+        self.root = self.parent / "project"
+        self.root.mkdir()
+        for source in evaluation.SOURCES:
+            path = self.root / source
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((evaluation.PROJECT / source).read_bytes())
+        # La suite también se ejecuta sobre copias de producto sin .git.
+        # El fixture debe tener su propio repositorio, no depender del del lanzador.
+        from process_environment import process_environment
+        with process_environment() as env:
+            for args in (["init", "-q", "--template="], ["add", "."],
+                         ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                          "-c", "commit.gpgsign=false", "commit", "-qm", "Fixture"]):
+                subprocess.run(["git", "-C", str(self.root), *args], env=env,
+                               check=True, capture_output=True, timeout=10)
 
     def synthetic(self):
         with patch("review_diff.invoke_reviewer", side_effect=AssertionError("No se permite un modelo")):
-            result = evaluation.check(self.experiment)
+            result = evaluation.check(self.experiment, root=self.root)
         return result, evaluation.read_json(self.experiment / "juicios_sinteticos.json")
 
     def test_frozen_eight_commits_reproduce_and_previews_match_production_cli(self):
         with patch("review_diff.invoke_reviewer", side_effect=AssertionError("No modelo")):
-            evaluation.prepare(self.experiment)
+            evaluation.prepare(self.experiment, root=self.root)
         manifest, cases = evaluation.validate_preparation(self.experiment)
         another = evaluation.build_repository(self.parent / "other.git", cases)
         self.assertEqual([c["id"] for c in cases], evaluation.IDS)
@@ -36,7 +51,7 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case["id"]):
                 self.assertEqual(another[case["id"]], case["commits"])
-                cmd = [sys.executable, "-B", str(evaluation.PROJECT / "review_diff.py"), "--repo",
+                cmd = [sys.executable, "-B", str(self.root / "review_diff.py"), "--repo",
                        str(self.experiment / "preparacion/repo.git"), "--base", case["commits"]["base"],
                        "--candidate", case["commits"]["candidato"], "--file", "module.py"]
                 for criterion in case["criterios"]:
@@ -122,11 +137,11 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         self.assertEqual(result["totales"]["fallos_tecnicos"]["numerador"], 2)
 
     def test_preparation_tampering_is_rejected_before_any_reviewer(self):
-        evaluation.prepare(self.experiment)
+        evaluation.prepare(self.experiment, root=self.root)
         path = self.experiment / "preparacion/fuentes" / evaluation.CORPUS
         path.write_text("{}")
         with patch("review_diff.run_review") as reviewer, self.assertRaisesRegex(ValueError, "alterada"):
-            evaluation.run(self.experiment)
+            evaluation.run(self.experiment, root=self.root)
         reviewer.assert_not_called()
         self.assertFalse((self.experiment / "lanzamiento").exists())
 
@@ -144,14 +159,14 @@ class EvaluateReviewDiffTests(unittest.TestCase):
                             str(work / "respuesta.schema.json"), "--output-last-message", str(final)]}
 
     def test_production_path_uses_review_diff_once_per_case_and_refuses_relaunch(self):
-        evaluation.prepare(self.experiment)
+        evaluation.prepare(self.experiment, root=self.root)
         with patch("review_diff.invoke_reviewer", side_effect=self.fake_reviewer) as reviewer:
-            result = evaluation.run(self.experiment)
+            result = evaluation.run(self.experiment, root=self.root)
             self.assertEqual(result["estado"], "completada")
             self.assertEqual(reviewer.call_count, 8)
             before = snapshot_tree(self.experiment / "lanzamiento")
             with self.assertRaises(FileExistsError):
-                evaluation.run(self.experiment)
+                evaluation.run(self.experiment, root=self.root)
             self.assertEqual(snapshot_tree(self.experiment / "lanzamiento"), before)
             self.assertEqual(reviewer.call_count, 8)
         judgments = evaluation.judgments_template(self.experiment)
@@ -159,10 +174,10 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         self.assertTrue(all(not j["revision_completa"] for j in judgments["casos"]))
 
     def test_initial_technical_failure_stops_and_remaining_cases_are_not_omissions(self):
-        evaluation.prepare(self.experiment)
+        evaluation.prepare(self.experiment, root=self.root)
         with patch("review_diff.invoke_reviewer", return_value={"estado": "cli_no_disponible",
                 "codigo_salida": None, "invocaciones": 0}) as reviewer:
-            result = evaluation.run(self.experiment)
+            result = evaluation.run(self.experiment, root=self.root)
         self.assertEqual(result["estado"], "incompleta")
         self.assertEqual(reviewer.call_count, 1)
         self.assertEqual(result["casos"][0]["estado"], "fallo_tecnico")
@@ -175,7 +190,7 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         self.assertIsNone(result["totales"]["deteccion"]["proporcion"])
 
     def test_changed_cli_version_is_technical_and_stops_without_retry(self):
-        evaluation.prepare(self.experiment)
+        evaluation.prepare(self.experiment, root=self.root)
         calls = []
         def reviewer(*args, **kwargs):
             calls.append(1)
@@ -184,7 +199,7 @@ class EvaluateReviewDiffTests(unittest.TestCase):
                 (args[3] / "codex_version.txt").write_text("different-cli\n")
             return result
         with patch("review_diff.invoke_reviewer", side_effect=reviewer):
-            result = evaluation.run(self.experiment)
+            result = evaluation.run(self.experiment, root=self.root)
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["estado"], "incompleta")
         self.assertEqual(result["casos"][1]["estado"], "fallo_tecnico")
@@ -192,7 +207,7 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         self.assertTrue(all(c["estado"] == "no_ejecutado" for c in result["casos"][2:]))
 
     def test_tampering_previous_report_during_final_review_prevents_completion(self):
-        evaluation.prepare(self.experiment)
+        evaluation.prepare(self.experiment, root=self.root)
         calls = []
         def reviewer(*args, **kwargs):
             calls.append(1)
@@ -201,14 +216,14 @@ class EvaluateReviewDiffTests(unittest.TestCase):
                 (self.experiment / "lanzamiento/caso_01/instrucciones.txt").write_text("alterado")
             return result
         with patch("review_diff.invoke_reviewer", side_effect=reviewer):
-            result = evaluation.run(self.experiment)
+            result = evaluation.run(self.experiment, root=self.root)
         self.assertEqual(len(calls), 8)
         self.assertEqual(result["estado"], "incompleta")
         self.assertEqual(result["casos"][-1]["estado"], "fallo_tecnico")
         self.assertIn("anterior alterado", result["casos"][-1]["error"])
 
     def test_cli_check_no_model_and_explicit_authorization_required(self):
-        cli = [sys.executable, "-B", str(evaluation.PROJECT / "evaluate_review_diff.py")]
+        cli = [sys.executable, "-B", str(self.root / "evaluate_review_diff.py")]
         proc = subprocess.run(cli + ["check", "--output", str(self.experiment)], capture_output=True, timeout=30)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads(proc.stdout)["modo"], "sintetico")
