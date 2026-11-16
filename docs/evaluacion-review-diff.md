@@ -1,8 +1,10 @@
 # Protocolo propuesto: ocho diffs Python para review_diff
 
-Esta PR prepara una campaña, **no la ejecuta con un modelo**. Los casos y sus
-expectativas quedan sujetos a revisión humana antes de autorizarla. El modo C++
-snapshot queda fuera. `review_diff.py` conserva su interfaz y su política Codex;
+La preparación inicial de esta PR se validó sin modelos. Posteriormente se
+autorizó una única campaña real sobre el commit revisado
+`67e16983f511dedb04b81cddd5d3ecffb9a3156c`; su resultado parcial y la adjudicación
+aprobada por Álvaro se documentan al final. El modo C++ snapshot queda fuera.
+`review_diff.py` conserva su interfaz y su política Codex;
 el nuevo `evaluate_review_diff.py` reutiliza sus materiales, esquema, validación
 de citas y `run_review()`. No desarrolla, incorpora ni ejecuta candidatos.
 
@@ -86,9 +88,11 @@ se añaden al material. Esta separación de contexto no convierte el modo Codex 
 solo lectura en una garantía de confidencialidad frente a un agente que incumpla
 las instrucciones; se conserva el alcance del [piloto](revision-diff.md).
 
-## Comando de la campaña real: pendiente de autorización
+## Comando y reserva de la campaña real
 
-Después de revisar esta PR y sus expectativas, desde el commit aprobado limpio:
+Esta secuencia conserva el comando del lanzamiento autorizado desde el commit
+revisado limpio. **La preparación `runs/review-diff-real-01` ya existe y tiene
+`lanzamiento/`: no repetir ni reanudar estos comandos para esa campaña.**
 
 ```bash
 mkdir -p runs
@@ -211,9 +215,61 @@ suite ordinaria y las 13 integraciones reales de Podman; estas últimas acredita
 la frontera de pruebas de proyectos, **no una campaña real de revisión**.
 Los recuentos y enlaces del SHA final se registran en la PR.
 
-Queda pendiente medir al revisor real: detecciones, omisiones, falsos y adicionales,
-fallos técnicos, configuración efectiva observada y tiempo de adjudicación humana.
-Ocho casos de lógica sencilla no representan todos los diffs Python; no permiten
-estimar fiabilidad general. Se conservan los ocho casos aunque un resultado
-desfavorezca al revisor. La campaña y su publicación quedan para después de la
-revisión humana de este protocolo; esta PR permanece en borrador.
+## Resultado parcial real: review-diff-real-01
+
+Se realizó un único lanzamiento desde el SHA revisado
+`67e16983f511dedb04b81cddd5d3ecffb9a3156c`, con las ocho vistas previas comprobadas
+antes de invocar al revisor. Se registraron **3 invocaciones**, una por caso y
+sin reintentos. La campaña terminó `incompleta`, con salida 1, al detenerse en
+`caso_03`. Los dos informes disponibles se adjudicaron con decisiones aprobadas
+por Álvaro, conservando los hashes e índices del juicio:
+
+- `caso_01`: informe sin hallazgos. Se confirmó la equivalencia de la comparación
+  encadenada para el dominio del contrato, incluidos límites, orden y duplicados.
+- `caso_02`: el único hallazgo se marcó respaldado y correspondiente a D1.
+  La comprensión asigna 1 a cada clave, perdiendo los recuentos repetidos.
+- `caso_03`: fallo técnico por timeout, no un defecto omitido por el revisor.
+- `caso_04` a `caso_08`: sin ejecutar, no informes vacíos ni resultados negativos.
+
+La puntuación parcial conservada distingue cobertura y resultados evaluables:
+
+| Magnitud | Recuento y denominador |
+| --- | --- |
+| Informes adjudicados | **2/8** casos planificados |
+| Cobertura de defectos | **1/4** defectos planificados; 3 no evaluables |
+| Cobertura de casos correctos | **1/4** correctos planificados; 3 no evaluables |
+| Defectos detectados | **1/1** defecto evaluable |
+| Defectos omitidos | **0/1** defecto evaluable |
+| Casos correctos con falsos hallazgos | **0/1** caso correcto evaluable |
+| Fallos técnicos entre invocaciones realizadas | **1/3** invocaciones |
+| Fallos técnicos entre casos planificados | **1/8** casos |
+| Casos sin ejecutar | **5/8** casos planificados |
+
+El resultado 1/1 describe únicamente el defecto evaluable; no acredita detección
+de los otros tres defectos ni éxito sobre los ocho casos. Los no evaluables no
+se cuentan como omisiones. Estas cifras reales parciales son distintas de los
+recuentos sintéticos de la sección anterior y no estiman fiabilidad general.
+
+### Timeout de caso_03: observación y límites del diagnóstico
+
+El último evento observable, en la línea 5 de `eventos.jsonl`, fue
+`item.completed` para `command_execution`: la lectura de `materiales.json`
+mediante `/bin/bash -lc 'cat materiales.json'` terminó con código **0**, y su
+salida coincide con los materiales congelados. Después no consta respuesta
+final ni evento `turn.completed`; `stderr` está vacío.
+
+El proceso registra `tiempo_agotado`, límite de 180 s y salida **-9**. Su
+`duracion_segundos`, calculada con el reloj monotónico, es **180.018 s**
+(redondeada de 180.01781967599527). Entre las marcas UTC de inicio
+`2026-11-16T10:56:16.277374Z` y fin `2026-11-16T11:12:07.304370Z` hay
+**951.027 s** (redondeados de 951.026996). Son mediciones distintas y no se
+sustituye una por otra. **No se pudo determinar la causa del timeout ni de
+la diferencia entre relojes con la evidencia conservada.** La lectura finalizada
+no permite atribuir la demora a `cat`, al modelo, al servicio o al anfitrión.
+
+Los originales permanecen en `runs/review-diff-real-01/`, fuera de Git:
+`preparacion/`, `lanzamiento/`, `juicios.json`, `puntuacion-parcial.json` y
+`resumen-adjudicacion-parcial.json`. Esta actualización publica solo evidencia
+agregada; no modifica los registros, el timeout ni la puntuación, no invoca
+modelos y no reanuda la campaña. Cualquier campaña nueva requiere autorización
+separada. Se conservan los ocho casos y sus expectativas; la PR sigue en borrador.
