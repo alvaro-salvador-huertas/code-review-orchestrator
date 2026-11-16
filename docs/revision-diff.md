@@ -1,5 +1,10 @@
 # Piloto: revisar un cambio propio de Python
 
+El [protocolo de evaluación con ocho diffs Python](evaluacion-review-diff.md)
+prepara casos congelados, vistas previas y puntuación con juicio humano. Su modo
+de comprobación usa informes sintéticos; la campaña con modelo queda pendiente
+de revisar los casos y expectativas.
+
 `review_diff.py` revisa un cambio que ya existe en Git. No inicia desarrollo,
 no requiere que falle la aceptación y no incorpora ningún cambio. El flujo
 de orquestación y sus registros anteriores quedan aparte.
