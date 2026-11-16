@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "procedencia": "fixture_sintetico",
+  "casos": [
+    {
+      "id": "caso_01",
+      "estado": "informe_disponible",
+      "respuesta": {
+        "resumen": "Informe sintético para probar el protocolo; no mide al revisor.",
+        "hallazgos": []
+      },
+      "juicios": []
+    },
+    {
+      "id": "caso_02",
+      "estado": "informe_disponible",
+      "respuesta": {
+        "resumen": "Informe sintético para probar el protocolo; no mide al revisor.",
+        "hallazgos": [
+          {
+            "archivo": "module.py",
+            "lado": "candidato",
+            "linea": 2,
+            "evidencia": "return {value: 1 for value in values}",
+            "impacto": "No acumula repeticiones.",
+            "comprobacion": "Probar dos cadenas iguales."
+          },
+          {
+            "archivo": "module.py",
+            "lado": "candidato",
+            "linea": 2,
+            "evidencia": "return {value: 1 for value in values}",
+            "impacto": "El total pierde las repeticiones.",
+            "comprobacion": "Sumar los recuentos con dos cadenas iguales."
+          },
+          {
+            "archivo": "module.py",
+            "lado": "candidato",
+            "linea": 2,
+            "evidencia": "return {value: 1 for value in values}",
+            "impacto": "La lista vacía falla.",
+            "comprobacion": "Probar una lista vacía."
+          }
+        ]
+      },
+      "juicios": [
+        {
+          "respaldado": true,
+          "defecto": "D1",
+          "justificacion": "La comprensión asigna 1; el contraejemplo congelado acredita D1."
+        },
+        {
+          "respaldado": true,
+          "defecto": "D1",
+          "justificacion": "Es otra mención del mismo D1, no otro defecto."
+        },
+        {
+          "respaldado": false,
+          "defecto": null,
+          "justificacion": "Una comprensión sobre lista vacía devuelve {}, como exige el contrato."
+        }
+      ]
+    },
+    {
+      "id": "caso_03",
+      "estado": "informe_disponible",
+      "respuesta": {
+        "resumen": "Informe sintético para probar el protocolo; no mide al revisor.",
+        "hallazgos": []
+      },
+      "juicios": []
+    },
+    {
+      "id": "caso_04",
+      "estado": "informe_disponible",
+      "respuesta": {
+        "resumen": "Informe sintético para probar el protocolo; no mide al revisor.",
+        "hallazgos": [
+          {
+            "archivo": "module.py",
+            "lado": "candidato",
+            "linea": 2,
+            "evidencia": "return sum(values, 0)",
+            "impacto": "Los negativos se pierden.",
+            "comprobacion": "Probar valores negativos."
+          }
+        ]
+      },
+      "juicios": [
+        {
+          "respaldado": false,
+          "defecto": null,
+          "justificacion": "sum admite enteros negativos y conserva la suma; el contrato no excluye negativos."
+        }
+      ]
+    },
+    {
+      "id": "caso_05",
+      "estado": "informe_disponible",
+      "respuesta": {
+        "resumen": "Informe sintético para probar el protocolo; no mide al revisor.",
+        "hallazgos": [
+          {
+            "archivo": "module.py",
+            "lado": "candidato",
+            "linea": 2,
+            "evidencia": "return values[-1]",
+            "impacto": "Vacío lanza IndexError.",
+            "comprobacion": "Llamar a last([])."
+          }
+        ]
+      },
+      "juicios": [
+        {
+          "respaldado": true,
+          "defecto": "D1",
+          "justificacion": "El índice -1 sobre [] falla antes de poder devolver None."
+        }
+      ]
+    },
+    {
+      "id": "caso_06",
+      "estado": "informe_disponible",
+      "respuesta": {
+        "resumen": "Informe sintético para probar el protocolo; no mide al revisor.",
+        "hallazgos": []
+      },
+      "juicios": []
+    },
+    {
+      "id": "caso_07",
+      "estado": "fallo_tecnico",
+      "respuesta": null,
+      "juicios": []
+    },
+    {
+      "id": "caso_08",
+      "estado": "informe_disponible",
+      "respuesta": {
+        "resumen": "Informe sintético para probar el protocolo; no mide al revisor.",
+        "hallazgos": []
+      },
+      "juicios": []
+    }
+  ]
+}

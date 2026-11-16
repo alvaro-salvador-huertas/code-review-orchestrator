@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "casos": [
+    {
+      "id": "caso_01",
+      "archivo": "module.py",
+      "criterios": [
+        "Conservar orden y duplicados al seleccionar enteros dentro de [low, high], incluidos ambos extremos; low <= high. Vacía devuelve []; no mutar la lista.",
+        "El cambio debe conservar el comportamiento de la base en todo el dominio indicado."
+      ],
+      "base": "def select(values, low, high):\n    return [x for x in values if low <= x and x <= high]\n",
+      "candidato": "def select(values, low, high):\n    return [x for x in values if low <= x <= high]\n",
+      "commits": {
+        "base": "ab0d4455070544576100e14d19582bdb4bb69fa6",
+        "candidato": "69dfbd55d74817c5a1ee2aa3e69b9cd230d3a29e"
+      },
+      "expectativa": {
+        "defectos": [],
+        "justificacion": "La conjunción de las dos desigualdades equivale a la comparación encadenada para enteros. La comprensión conserva orden, duplicados y vacío.",
+        "evidencia": {
+          "entrada": "select([1, 2, 2, 3], 1, 2)",
+          "esperado": "[1, 2, 2]",
+          "candidato": "[1, 2, 2]"
+        }
+      }
+    },
+    {
+      "id": "caso_02",
+      "archivo": "module.py",
+      "criterios": [
+        "Contar todas las apariciones de cada cadena en una lista finita. La suma de recuentos debe ser len(values). Vacía devuelve {}; no mutar la lista.",
+        "El cambio debe conservar el comportamiento de la base en todo el dominio indicado."
+      ],
+      "base": "def counts(values):\n    result = {}\n    for value in values:\n        result[value] = result.get(value, 0) + 1\n    return result\n",
+      "candidato": "def counts(values):\n    return {value: 1 for value in values}\n",
+      "commits": {
+        "base": "ad5916d5402c7c202d25aee18d55813e71d8dc47",
+        "candidato": "cde26118817e56914096f72ca7ea44cc9e450676"
+      },
+      "expectativa": {
+        "defectos": [
+          {
+            "id": "D1",
+            "descripcion": "Se pierden las repeticiones: cada clave acaba con recuento 1.",
+            "linea": 2
+          }
+        ],
+        "justificacion": "La asignación de la comprensión sobrescribe cada clave con 1; no acumula apariciones. El dominio incluye cadenas repetidas.",
+        "evidencia": {
+          "entrada": "counts(['a', 'a', 'b'])",
+          "esperado": "{'a': 2, 'b': 1}",
+          "candidato": "{'a': 1, 'b': 1}"
+        }
+      }
+    },
+    {
+      "id": "caso_03",
+      "archivo": "module.py",
+      "criterios": [
+        "Seleccionar los enteros menores o iguales a ceiling, conservando orden y duplicados. Vacía devuelve []; no mutar la lista.",
+        "El cambio debe conservar el comportamiento de la base en todo el dominio indicado."
+      ],
+      "base": "def below(values, ceiling):\n    return [x for x in values if x <= ceiling]\n",
+      "candidato": "def below(values, ceiling):\n    return [x for x in values if x < ceiling]\n",
+      "commits": {
+        "base": "5d0066f3c49949f0dca2698dc6bdb43416771b92",
+        "candidato": "d21b1a65fe1bdda47b049c7a4c9e1742d4981f5a"
+      },
+      "expectativa": {
+        "defectos": [
+          {
+            "id": "D1",
+            "descripcion": "Se excluyen los valores iguales al límite inclusivo.",
+            "linea": 2
+          }
+        ],
+        "justificacion": "El cambio de <= por < elimina precisamente los elementos iguales al límite, admitidos por el contrato.",
+        "evidencia": {
+          "entrada": "below([2, 3, 3], 3)",
+          "esperado": "[2, 3, 3]",
+          "candidato": "[2]"
+        }
+      }
+    },
+    {
+      "id": "caso_04",
+      "archivo": "module.py",
+      "criterios": [
+        "Devolver la suma de una lista finita de enteros, incluidos negativos. Vacía devuelve 0. No mutar la lista.",
+        "El cambio debe conservar el comportamiento de la base en todo el dominio indicado."
+      ],
+      "base": "def total(values):\n    result = 0\n    for value in values:\n        result += value\n    return result\n",
+      "candidato": "def total(values):\n    return sum(values, 0)\n",
+      "commits": {
+        "base": "2b6501862fe33f7c7ae1f911bd8c529f1cfa4527",
+        "candidato": "e399f880ae31c08bda00dc7f19ccf7d467e027eb"
+      },
+      "expectativa": {
+        "defectos": [],
+        "justificacion": "Sum usa el mismo neutro entero 0 y las mismas sumas; los enteros Python no desbordan. Incluye vacío y negativos.",
+        "evidencia": {
+          "entrada": "total([-2, 5, -1])",
+          "esperado": "2",
+          "candidato": "2"
+        }
+      }
+    },
+    {
+      "id": "caso_05",
+      "archivo": "module.py",
+      "criterios": [
+        "Devolver el último elemento de una lista finita de enteros, o None si está vacía. No mutar la lista.",
+        "El cambio debe conservar el comportamiento de la base en todo el dominio indicado."
+      ],
+      "base": "def last(values):\n    return values[-1] if values else None\n",
+      "candidato": "def last(values):\n    return values[-1]\n",
+      "commits": {
+        "base": "595b28b9421d8a5c6331dd6ffc1abd4fd6f9e65b",
+        "candidato": "6f3d5752ca9c609963a239b8e71abea7a845e6eb"
+      },
+      "expectativa": {
+        "defectos": [
+          {
+            "id": "D1",
+            "descripcion": "La lista vacía provoca IndexError en vez de devolver None.",
+            "linea": 2
+          }
+        ],
+        "justificacion": "Se retira la rama que comprobaba vacío. El índice -1 no existe en una lista sin elementos.",
+        "evidencia": {
+          "entrada": "last([])",
+          "esperado": "None",
+          "candidato": "IndexError"
+        }
+      }
+    },
+    {
+      "id": "caso_06",
+      "archivo": "module.py",
+      "criterios": [
+        "Para enteros count >= 0 y size >= 1, devolver el número mínimo de lotes de capacidad size necesarios para count elementos. Cero elementos requiere 0 lotes.",
+        "El cambio debe conservar el comportamiento de la base en todo el dominio indicado."
+      ],
+      "base": "def batches(count, size):\n    return (count + size - 1) // size\n",
+      "candidato": "def batches(count, size):\n    quotient, remainder = divmod(count, size)\n    return quotient + int(remainder != 0)\n",
+      "commits": {
+        "base": "84ec475ab6272af08222ce65bf562d06d478758d",
+        "candidato": "2f803e39171de1575f0dcf97d25c2681aebfe652"
+      },
+      "expectativa": {
+        "defectos": [],
+        "justificacion": "Con count no negativo y size positivo, el techo de la división es el cociente más uno exactamente cuando el resto no es cero.",
+        "evidencia": {
+          "entrada": "batches(7, 3); batches(0, 3)",
+          "esperado": "3; 0",
+          "candidato": "3; 0"
+        }
+      }
+    },
+    {
+      "id": "caso_07",
+      "archivo": "module.py",
+      "criterios": [
+        "Partir una lista finita de enteros en dos listas nuevas: negativos y no negativos (incluido 0). Conservar orden, duplicados y recuento total; no mutar la entrada. Vacía devuelve ([], []).",
+        "El cambio debe conservar el comportamiento de la base en todo el dominio indicado."
+      ],
+      "base": "def partition(values):\n    negative, nonnegative = [], []\n    for x in values:\n        if x < 0:\n            negative.append(x)\n        else:\n            nonnegative.append(x)\n    return negative, nonnegative\n",
+      "candidato": "def partition(values):\n    return ([x for x in values if x < 0],\n            [x for x in values if x >= 0])\n",
+      "commits": {
+        "base": "f93e9ad12745d8aba4cd9d4c4c7ad5af6b057144",
+        "candidato": "df8b9b168d3c3bb002d1e221b9cd6850e18d8492"
+      },
+      "expectativa": {
+        "defectos": [],
+        "justificacion": "Para enteros, < 0 y >= 0 son excluyentes y exhaustivos. Ambas comprensiones conservan orden y multiplicidad y crean listas nuevas.",
+        "evidencia": {
+          "entrada": "partition([-1, 0, -1, 2])",
+          "esperado": "([-1, -1], [0, 2])",
+          "candidato": "([-1, -1], [0, 2])"
+        }
+      }
+    },
+    {
+      "id": "caso_08",
+      "archivo": "module.py",
+      "criterios": [
+        "Devolver la media aritmética mediante división real de una lista de hasta 1000 enteros, cada uno entre -1000 y 1000. Vacía devuelve 0. No mutar la lista.",
+        "El cambio debe conservar el comportamiento de la base en todo el dominio indicado."
+      ],
+      "base": "def mean(values):\n    return sum(values) / len(values) if values else 0\n",
+      "candidato": "def mean(values):\n    return sum(values) // len(values) if values else 0\n",
+      "commits": {
+        "base": "540626dde44db1781a5bd386ecc76db1b6ff1fac",
+        "candidato": "c31aa8d126ec24cd33be6f4b246b99760a9538a5"
+      },
+      "expectativa": {
+        "defectos": [
+          {
+            "id": "D1",
+            "descripcion": "La división entera trunca hacia abajo las medias no enteras.",
+            "linea": 2
+          }
+        ],
+        "justificacion": "// calcula el suelo en vez del cociente real; se pierde la parte fraccionaria. La rama vacía sí se conserva.",
+        "evidencia": {
+          "entrada": "mean([1, 2])",
+          "esperado": "1.5",
+          "candidato": "1"
+        }
+      }
+    }
+  ]
+}
