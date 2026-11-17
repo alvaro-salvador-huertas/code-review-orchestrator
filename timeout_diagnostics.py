@@ -9,6 +9,16 @@ import time
 JSONL_TAIL_BYTES = 64 * 1024
 
 
+def _is_utf8_text(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def boottime_seconds():
     """CLOCK_BOOTTIME puede faltar en Python o no estar soportado por el SO."""
     try:
@@ -45,11 +55,11 @@ def jsonl_tail_summary(path):
             if index == len(lines) - 1 and not tail.endswith(b"\n"):
                 summary["estado"] = "linea_incompleta"
             continue
-        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+        if not isinstance(event, dict) or not _is_utf8_text(event.get("type")):
             continue
         last = {"tipo": event["type"]}
         item = event.get("item")
-        if isinstance(item, dict) and isinstance(item.get("type"), str):
+        if isinstance(item, dict) and _is_utf8_text(item.get("type")):
             last["tipo_item"] = item["type"]
         summary["ultimo_evento"] = last
         if summary["estado"] != "linea_incompleta":

@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -139,7 +140,7 @@ class TimeoutDiagnosticsTests(unittest.TestCase):
         self.assertEqual(result["estado"], "finalizada")
         self.assertNotIn("diagnostico_timeout", result)
 
-    def test_local_event_emitter_times_out_through_full_review_diff_flow(self):
+    def local_review_timeout(self, events, output):
         fake = self.root / "fake-reviewer"
         help_text = ("--config --sandbox read-only --cd --skip-git-repo-check --ephemeral "
                      "--json --output-last-message --output-schema")
@@ -151,8 +152,9 @@ class TimeoutDiagnosticsTests(unittest.TestCase):
             "if sys.argv[1:] == ['exec', '--help']:\n"
             f"    print({help_text!r}); sys.exit(0)\n"
             "sys.stdin.buffer.read()\n"
-            "print(json.dumps({'type': 'item.started', 'item': {'type': 'command_execution',\n"
-            "    'command': 'PRIVATE_PAYLOAD', 'pid': os.getpid()}}), flush=True)\n"
+            f"for event in {events!r}:\n"
+            "    event['fixture_pid'] = os.getpid()\n"
+            "    print(json.dumps(event), flush=True)\n"
             "time.sleep(30)\n",
             encoding="utf-8",
         )
@@ -160,7 +162,13 @@ class TimeoutDiagnosticsTests(unittest.TestCase):
         # Solo este ejecutable local sustituye al revisor; nunca se lanza Codex.
         with patch.object(review_case, "CODEX_EXECUTABLE", str(fake)), \
                 patch.object(review_diff, "TIMEOUT", 0.5):
-            result = review_diff.run_review({"archivos": [{"archivo": "app.py"}]}, self.log)
+            return review_diff.run_review({"archivos": [{"archivo": "app.py"}]}, output)
+
+    def test_local_event_emitter_times_out_through_full_review_diff_flow(self):
+        result = self.local_review_timeout([{
+            "type": "item.started",
+            "item": {"type": "command_execution", "command": "PRIVATE_PAYLOAD"},
+        }], self.log)
         agent = result["revisor"]
         self.assertEqual(result["estado"], "fallo_tecnico")
         self.assertIsNone(result["respuesta"])
@@ -187,7 +195,62 @@ class TimeoutDiagnosticsTests(unittest.TestCase):
             self.assertEqual(agent["codigo_salida"], -signal.SIGKILL)
             event = json.loads((self.log / "revisor/eventos.jsonl").read_bytes())
             with self.assertRaises(ProcessLookupError):
-                os.kill(event["item"]["pid"], 0)
+                os.kill(event["fixture_pid"], 0)
+
+    def test_local_surrogate_events_preserve_both_timeout_records(self):
+        for field in ("type", "item.type"):
+            for codepoint in (0xd800, 0xdfff):
+                with self.subTest(field=field, codepoint=hex(codepoint)):
+                    event = {"type": "item.completed", "item": {"type": "agent_message"}}
+                    if field == "type":
+                        event["type"] = chr(codepoint)
+                        expected = {"tipo": "thread.started"}
+                    else:
+                        event["item"]["type"] = chr(codepoint)
+                        expected = {"tipo": "item.completed"}
+                    output = self.root / f"{field}-{codepoint:x}"
+                    result = self.local_review_timeout([{"type": "thread.started"}, event], output)
+                    self.assertEqual(result["estado"], "fallo_tecnico")
+                    self.assertIsNone(result["respuesta"])
+                    # Ambos documentos deben poder leerse como UTF-8 estricto y JSON.
+                    process = json.loads((output / "revisor/resultado.json").read_text(encoding="utf-8"))
+                    saved = json.loads((output / "resultado.json").read_text(encoding="utf-8"))
+                    self.assertEqual(saved, result)
+                    agent = saved["revisor"]
+                    self.assertEqual(process, {k: v for k, v in agent.items()
+                                              if k not in ("version", "ayuda", "invocaciones")})
+                    self.assertEqual(agent["invocaciones"], 1)
+                    for record in (process, agent):
+                        self.assertEqual(record["estado"], "tiempo_agotado")
+                        self.assertEqual(record["limite_segundos"], 0.5)
+                        self.assertIsNone(record["error"])
+                        if os.name == "posix":
+                            self.assertEqual(record["codigo_salida"], -signal.SIGKILL)
+                        else:
+                            self.assertNotEqual(record["codigo_salida"], 0)
+                        diagnostic = record["diagnostico_timeout"]
+                        self.assertEqual(diagnostic["inicio_utc"], record["inicio_utc"])
+                        for key in ("inicio_utc", "timeout_utc"):
+                            self.assertTrue(diagnostic[key].endswith("Z"))
+                        self.assertLessEqual(datetime.fromisoformat(record["inicio_utc"]),
+                                             datetime.fromisoformat(diagnostic["timeout_utc"]))
+                        self.assertLessEqual(datetime.fromisoformat(diagnostic["timeout_utc"]),
+                                             datetime.fromisoformat(record["fin_utc"]))
+                        self.assertGreaterEqual(diagnostic["duracion_monotonica_segundos"], 0.5)
+                        self.assertGreaterEqual(record["duracion_segundos"],
+                                                diagnostic["duracion_monotonica_segundos"])
+                        if boottime_seconds() is not None:
+                            self.assertGreaterEqual(diagnostic["duracion_boottime_segundos"], 0.5)
+                        self.assertEqual(diagnostic["eventos_jsonl"], {
+                            "estado": "leido", "cola_limitada": False, "ultimo_evento": expected,
+                        })
+                    events = (output / "revisor/eventos.jsonl").read_bytes()
+                    self.assertIn(f"\\u{codepoint:04x}".encode("ascii"), events)
+                    if os.name == "posix":
+                        pid = json.loads(events.splitlines()[-1])["fixture_pid"]
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(pid, 0)
+        self.assertEqual(review_diff.TIMEOUT, 180)
 
 
 class JsonlTailTests(unittest.TestCase):
@@ -230,6 +293,37 @@ class JsonlTailTests(unittest.TestCase):
         })
         self.assertEqual(self.summary(b'[]\n'),
                          {"estado": "sin_evento_completo", "cola_limitada": False})
+
+    def test_unencodable_event_type_is_skipped_in_favor_of_previous_event(self):
+        for invalid in (chr(0xd800), chr(0xdfff), "prefix" + chr(0xd800) + "suffix"):
+            with self.subTest(invalid=repr(invalid)):
+                event = json.dumps({"type": invalid, "item": {"type": "agent_message"}}).encode("ascii")
+                self.assertEqual(self.summary(b'{"type":"thread.started"}\n' + event + b"\n"), {
+                    "estado": "leido", "cola_limitada": False,
+                    "ultimo_evento": {"tipo": "thread.started"},
+                })
+                self.assertEqual(self.summary(event + b"\n"), {
+                    "estado": "sin_evento_completo", "cola_limitada": False,
+                })
+
+    def test_unencodable_item_type_is_omitted_without_losing_event_type(self):
+        for invalid in (chr(0xd800), chr(0xdfff), "prefix" + chr(0xdfff) + "suffix"):
+            with self.subTest(invalid=repr(invalid)):
+                event = json.dumps({"type": "item.completed", "item": {"type": invalid}}).encode("ascii")
+                self.assertEqual(self.summary(b'{"type":"thread.started"}\n' + event + b"\n"), {
+                    "estado": "leido", "cola_limitada": False,
+                    "ultimo_evento": {"tipo": "item.completed"},
+                })
+
+    def test_valid_unicode_types_and_surrogate_pairs_keep_original_format(self):
+        event = {"type": "événement.\U0001f680", "item": {"type": "mensaje.\U0001f4a1"}}
+        # ensure_ascii=True produce un par válido de sustitutos para cada emoji.
+        summary = self.summary((json.dumps(event) + "\n").encode("ascii"))
+        self.assertEqual(summary, {
+            "estado": "leido", "cola_limitada": False,
+            "ultimo_evento": {"tipo": event["type"], "tipo_item": event["item"]["type"]},
+        })
+        self.assertEqual(json.loads(review_diff.json_bytes(summary)), summary)
 
     def test_bounded_read_never_parses_cut_first_line_as_an_event(self):
         # El sufijo parece un evento, pero su línea empieza antes de la cola.

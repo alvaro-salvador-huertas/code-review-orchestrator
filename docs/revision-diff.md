@@ -76,6 +76,12 @@ con un `type` de texto. Guarda únicamente ese tipo (`ultimo_evento.tipo`) y,
 si existe, el tipo de su ítem (`ultimo_evento.tipo_item`), sin textos,
 comandos, identificadores ni otros contenidos del evento.
 
+Los tipos deben ser codificables en UTF-8 estricto: si `type` contiene un
+sustituto Unicode aislado (por ejemplo, `\ud800`), se descarta ese evento y se
+sigue buscando hacia atrás. Si solo `item.type` es inválido, se conserva el
+tipo del evento y se omite `tipo_item`. Los tipos válidos conservan su formato;
+estos campos inválidos no impiden guardar el timeout en ambos resúmenes JSON.
+
 `cola_limitada` indica que se leyó solo una cola. `estado` distingue `vacio`,
 `leido`, `sin_evento_completo`, `linea_incompleta` y `error_lectura`. Una última
 línea sin salto final que no se puede decodificar como JSON se marca como
