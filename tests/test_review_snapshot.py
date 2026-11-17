@@ -144,12 +144,13 @@ class ReviewSnapshotTests(unittest.TestCase):
         materials = self.prepare()
         output = self.root / "run"
 
-        def simulate(work, final_path, prompt, log, *, on_invoke, timeout):
+        def simulate(work, final_path, prompt, log, *, on_invoke, timeout, timeout_diagnostics):
             self.assertEqual({p.name for p in work.iterdir()},
                              {"materiales.json", "respuesta.schema.json"})
             self.assertEqual(json.loads((work / "materiales.json").read_bytes()), materials)
             self.assertEqual(prompt, SNAPSHOT_PROMPT.encode("utf-8"))
             self.assertEqual(timeout, 180)
+            self.assertTrue(timeout_diagnostics)
             on_invoke()
             final_path.write_bytes(json_bytes({"resumen": "Sin hallazgos.", "hallazgos": []}))
             return {"estado": "finalizada", "codigo_salida": 0, "invocaciones": 1}

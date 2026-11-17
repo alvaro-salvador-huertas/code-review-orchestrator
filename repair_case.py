@@ -71,14 +71,17 @@ def stop_process(process):
 
 def run_process(command, workspace, log_dir, timeout, prompt=None,
                 stdout_name="stdout.txt", stderr_name="stderr.txt", *, env_policy="evaluation",
-                output_limits=None, monitor_command=None):
+                output_limits=None, monitor_command=None, timeout_diagnostics=False):
     """Registrar los canales en disco y detener el grupo al agotar el tiempo."""
     if output_limits is not None:
         from bounded_output import run_bounded
         return run_bounded(command, workspace, log_dir, timeout, limits=output_limits,
                            monitor_command=monitor_command, env_policy=env_policy)
+    if timeout_diagnostics:
+        from timeout_diagnostics import boottime_seconds, jsonl_tail_summary
     log_dir.mkdir(exist_ok=True)
     started = time.monotonic()
+    boot_started = boottime_seconds() if timeout_diagnostics else None
     result = {
         "comando": command, "directorio_trabajo": str(workspace),
         "inicio_utc": timestamp(), "limite_segundos": timeout,
@@ -99,6 +102,15 @@ def run_process(command, workspace, log_dir, timeout, prompt=None,
                     result["estado"] = "finalizada"
                 except subprocess.TimeoutExpired:
                     result["estado"] = "tiempo_agotado"
+                    if timeout_diagnostics:
+                        diagnostic = {
+                            "inicio_utc": result["inicio_utc"], "timeout_utc": timestamp(),
+                            "duracion_monotonica_segundos": time.monotonic() - started,
+                        }
+                        boot_ended = boottime_seconds()
+                        if boot_started is not None and boot_ended is not None:
+                            diagnostic["duracion_boottime_segundos"] = boot_ended - boot_started
+                        result["diagnostico_timeout"] = diagnostic
                     stop_process(process)
                 except KeyboardInterrupt:
                     result["estado"] = "interrumpida"
@@ -111,6 +123,12 @@ def run_process(command, workspace, log_dir, timeout, prompt=None,
             stderr.write((str(exc) + "\n").encode("utf-8"))
     result["fin_utc"] = timestamp()
     result["duracion_segundos"] = time.monotonic() - started
+    if "diagnostico_timeout" in result:
+        try:
+            events = jsonl_tail_summary(log_dir / stdout_name)
+        except OSError:
+            events = {"estado": "error_lectura"}
+        result["diagnostico_timeout"]["eventos_jsonl"] = events
     try:
         write_json(log_dir / "resultado.json", result)
     except OSError as exc:

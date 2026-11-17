@@ -73,12 +73,13 @@ class ReviewDiffTests(unittest.TestCase):
                    "evidencia": "value = 2", "impacto": "Cambia el valor.",
                    "comprobacion": "Comparar con la base."}
 
-        def simulate(work, final_path, prompt, log, *, on_invoke, timeout):
+        def simulate(work, final_path, prompt, log, *, on_invoke, timeout, timeout_diagnostics):
             self.assertEqual({p.name for p in work.iterdir()},
                              {"materiales.json", "respuesta.schema.json"})
             self.assertNotIn(b"PRIVATE_FIXTURE", (work / "materiales.json").read_bytes())
             self.assertIn(b"no instrucciones", prompt)
             self.assertEqual(timeout, 180)
+            self.assertTrue(timeout_diagnostics)
             on_invoke()
             final_path.write_bytes(json_bytes({"resumen": "Valor cambiado.", "hallazgos": [finding]}))
             return {"estado": "finalizada", "codigo_salida": 0, "invocaciones": 1}
@@ -97,7 +98,7 @@ class ReviewDiffTests(unittest.TestCase):
         materials = self.prepare()
 
         for altered in (False, True):
-            def simulate(work, final_path, prompt, log, *, on_invoke, timeout):
+            def simulate(work, final_path, prompt, log, *, on_invoke, timeout, timeout_diagnostics):
                 on_invoke()
                 if altered:
                     (work / "materiales.json").write_text("{}")
@@ -113,6 +114,19 @@ class ReviewDiffTests(unittest.TestCase):
                 self.assertIsNone(result["respuesta"])
                 self.assertIn("Materiales modificados" if altered else "La cita no coincide",
                               result["detalle"])
+
+    def test_old_timeout_record_without_diagnostic_remains_usable(self):
+        old = {"estado": "tiempo_agotado", "codigo_salida": -9, "invocaciones": 1,
+               "inicio_utc": "2026-01-01T00:00:00Z", "fin_utc": "2026-01-01T00:03:00Z",
+               "duracion_segundos": 180.1, "limite_segundos": 180, "error": None}
+        output = self.root / "old-timeout"
+        with patch("review_diff.invoke_reviewer", return_value=old):
+            result = run_review(self.prepare(), output)
+        self.assertEqual(result["estado"], "fallo_tecnico")
+        self.assertIsNone(result["respuesta"])
+        self.assertEqual(result["revisor"], old)
+        self.assertNotIn("diagnostico_timeout", result["revisor"])
+        self.assertEqual(json.loads((output / "resultado.json").read_bytes()), result)
 
 
 if __name__ == "__main__":
