@@ -50,6 +50,71 @@ Un código 0 en este modo significa informe disponible, incluso si contiene
 hallazgos; no equivale a aprobación. Un 1 indica fallo de revisión, un 2 indica
 entrada u operación inválida y un 130 indica interrupción del revisor.
 
+## Diagnóstico opcional del timeout
+
+`run_process()` e `invoke_reviewer()` admiten `timeout_diagnostics=False`.
+Solo `review_diff.py` lo activa para la ejecución principal del revisor,
+tanto en el modo Python como en snapshot. Las comprobaciones previas de la
+CLI y los demás flujos conservan el comportamiento anterior. El límite sigue
+siendo **180 s**, con la misma terminación del grupo de procesos y sin reintentos.
+
+Al detectar un timeout se añade el objeto opcional `diagnostico_timeout` al
+registro del proceso (`revisor/resultado.json`) y al revisor del resumen
+(`resultado.json`). Incluye `inicio_utc`, `timeout_utc` y
+`duracion_monotonica_segundos`, medidos hasta detectar el timeout, antes de
+detener el proceso. Si `CLOCK_BOOTTIME` está disponible en ambas muestras,
+incluye también `duracion_boottime_segundos`; si falta o falla, se omite esa
+clave. Estas observaciones **no atribuyen una causa** a la diferencia entre
+los relojes. Los campos existentes `inicio_utc`, `fin_utc` y
+`duracion_segundos` conservan su significado, incluida la limpieza del proceso.
+Los registros antiguos sin el nuevo objeto siguen siendo válidos.
+
+Tras detener el proceso, `eventos_jsonl` resume como máximo los últimos
+**64 KiB** de `revisor/eventos.jsonl`. Descarta la primera línea si empieza
+antes de la cola leída y busca hacia atrás el último objeto JSON completo
+con un `type` de texto. Guarda únicamente ese tipo (`ultimo_evento.tipo`) y,
+si existe, el tipo de su ítem (`ultimo_evento.tipo_item`), sin textos,
+comandos, identificadores ni otros contenidos del evento.
+
+Los tipos deben ser codificables en UTF-8 estricto: si `type` contiene un
+sustituto Unicode aislado (por ejemplo, `\ud800`), se descarta ese evento y se
+sigue buscando hacia atrás. Si solo `item.type` es inválido, se conserva el
+tipo del evento y se omite `tipo_item`. Los tipos válidos conservan su formato;
+estos campos inválidos no impiden guardar el timeout en ambos resúmenes JSON.
+
+`cola_limitada` indica que se leyó solo una cola. `estado` distingue `vacio`,
+`leido`, `sin_evento_completo`, `linea_incompleta` y `error_lectura`. Una última
+línea sin salto final que no se puede decodificar como JSON se marca como
+`linea_incompleta`; se conserva el evento completo anterior si cabe en la
+cola. Un JSON válido sin salto final cuenta como completo. Si toda una línea
+queda fuera del límite, no se reconstruye ni se busca fuera de la cola.
+Un fallo de lectura conserva el timeout, sus tiempos y su código de salida.
+
+Ejemplo sintético con relojes simulados (sin inferencia de causa):
+
+```json
+{
+  "inicio_utc": "2026-01-01T00:00:00Z",
+  "timeout_utc": "2026-01-01T00:06:40Z",
+  "duracion_monotonica_segundos": 180,
+  "duracion_boottime_segundos": 400,
+  "eventos_jsonl": {
+    "estado": "linea_incompleta",
+    "cola_limitada": false,
+    "ultimo_evento": {"tipo": "item.completed", "tipo_item": "agent_message"}
+  }
+}
+```
+
+Pruebas con relojes simulados, registros antiguos y un proceso local que emite
+un evento y agota un timeout corto, sin invocar modelos:
+
+```bash
+python3 -B -m unittest discover -s tests -p test_timeout_diagnostics.py -v
+python3 -B -m unittest discover -s tests -p test_review_diff.py -v
+python3 -B -m unittest discover -s tests -p test_review_snapshot.py -v
+```
+
 ## Qué puede confirmar la herramienta
 
 El controlador comprueba que la cita devuelta aparece en la línea y versión

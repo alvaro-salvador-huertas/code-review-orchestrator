@@ -215,7 +215,7 @@ def run_review(materials, output):
                 (work / name).write_bytes(data)
             initial = snapshot_tree(work)
             agent = invoke_reviewer(work, raw_response, prompt.encode("utf-8"), log,
-                                    on_invoke=reserve, timeout=TIMEOUT)
+                                    on_invoke=reserve, timeout=TIMEOUT, timeout_diagnostics=True)
             result["revisor"] = agent
             require(snapshot_tree(work) == initial, "Materiales modificados durante la revisión")
         if agent["estado"] == "finalizada" and agent["codigo_salida"] == 0:

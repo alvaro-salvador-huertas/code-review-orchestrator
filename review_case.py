@@ -315,7 +315,7 @@ def codex_model_options(*, model=None, reasoning_effort=None):
 
 
 def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None, timeout=None,
-                    model=None, reasoning_effort=None):
+                    model=None, reasoning_effort=None, timeout_diagnostics=False):
     """Una sesión nueva de Codex: sin resume, fork ni llamada al desarrollador."""
     options = codex_model_options(model=model, reasoning_effort=reasoning_effort)
     result = {"estado": "cli_no_disponible", "codigo_salida": None, "invocaciones": 0}
@@ -348,10 +348,12 @@ def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None, t
     ]
     if on_invoke is not None:
         on_invoke()
+    diagnostics = {"timeout_diagnostics": True} if timeout_diagnostics else {}
     try:
         execution = run_process(command, workspace, log_dir,
                                 AGENT_TIMEOUT_SECONDS if timeout is None else timeout, prompt=prompt,
-                                stdout_name="eventos.jsonl", stderr_name="stderr.txt", env_policy="codex")
+                                stdout_name="eventos.jsonl", stderr_name="stderr.txt", env_policy="codex",
+                                **diagnostics)
     except ProcessRecordError as exc:
         execution = exc.result
         execution["error_registro"] = str(exc)

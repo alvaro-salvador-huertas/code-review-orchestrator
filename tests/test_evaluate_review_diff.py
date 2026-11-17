@@ -45,6 +45,7 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         with patch("review_diff.invoke_reviewer", side_effect=AssertionError("No modelo")):
             evaluation.prepare(self.experiment, root=self.root)
         manifest, cases = evaluation.validate_preparation(self.experiment)
+        self.assertIn("fuentes/timeout_diagnostics.py", manifest["sha256"])
         another = evaluation.build_repository(self.parent / "other.git", cases)
         self.assertEqual([c["id"] for c in cases], evaluation.IDS)
         self.assertEqual(sum(bool(c["expectativa"]["defectos"]) for c in cases), 4)
@@ -145,12 +146,13 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         reviewer.assert_not_called()
         self.assertFalse((self.experiment / "lanzamiento").exists())
 
-    def fake_reviewer(self, work, final, prompt, log, *, on_invoke, timeout):
+    def fake_reviewer(self, work, final, prompt, log, *, on_invoke, timeout, timeout_diagnostics):
         self.assertEqual({p.name for p in work.iterdir()}, {"materiales.json", "respuesta.schema.json"})
         materials = evaluation.read_json(work / "materiales.json")
         self.assertNotIn("expectativa", materials)
         self.assertNotIn("casos", materials)
         self.assertEqual(timeout, 180)
+        self.assertTrue(timeout_diagnostics)
         on_invoke()
         final.write_bytes(review_diff.json_bytes({"resumen": "Respuesta simulada, no es un modelo.", "hallazgos": []}))
         (log / "codex_version.txt").write_text("fixture-cli\n")

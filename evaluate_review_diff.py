@@ -20,7 +20,8 @@ PROJECT = Path(__file__).resolve().parent
 CORPUS = "evals/review_diff/casos.json"
 FIXTURES = "evals/review_diff/informes_sinteticos.json"
 SOURCES = tuple(dict.fromkeys((*RUNTIME_FILES, "review_diff.py", "evaluate_review_diff.py",
-                              CORPUS, FIXTURES, "docs/evaluacion-review-diff.md")))
+                              "timeout_diagnostics.py", CORPUS, FIXTURES,
+                              "docs/evaluacion-review-diff.md")))
 IDS = [f"caso_{i:02d}" for i in range(1, 9)]
 ORIGIN = "evaluacion_diff_python_v1"
 
