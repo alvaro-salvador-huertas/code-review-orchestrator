@@ -1,11 +1,16 @@
-# Protocolo propuesto: ocho diffs Python para review_diff
+# Evaluación de ocho diffs Python con review_diff
 
-La preparación inicial de esta PR se validó sin modelos. Posteriormente se
-autorizó una única campaña real sobre el commit revisado
-`67e16983f511dedb04b81cddd5d3ecffb9a3156c`; su resultado parcial y la adjudicación
-aprobada por Álvaro se documentan al final. El modo C++ snapshot queda fuera.
+El protocolo y el corpus se incorporaron a `main` mediante la
+[PR #34](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/34),
+ya fusionada. Su preparación inicial se validó sin modelos. Después se
+autorizaron por separado las campañas `review-diff-real-01` y
+`review-diff-real-02`; sus resultados parciales y adjudicaciones aprobadas por
+Álvaro se documentan en secciones separadas. La segunda utiliza el diagnóstico
+de timeout incorporado en la
+[PR #35](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/35),
+también fusionada. El modo C++ snapshot queda fuera.
 `review_diff.py` conserva su interfaz y su política Codex;
-el nuevo `evaluate_review_diff.py` reutiliza sus materiales, esquema, validación
+`evaluate_review_diff.py` reutiliza sus materiales, esquema, validación
 de citas y `run_review()`. No desarrolla, incorpora ni ejecuta candidatos.
 
 ## Casos y expectativas anteriores a la campaña
@@ -90,9 +95,11 @@ las instrucciones; se conserva el alcance del [piloto](revision-diff.md).
 
 ## Comando y reserva de la campaña real
 
-Esta secuencia conserva el comando del lanzamiento autorizado desde el commit
-revisado limpio. **La preparación `runs/review-diff-real-01` ya existe y tiene
-`lanzamiento/`: no repetir ni reanudar estos comandos para esa campaña.**
+Esta secuencia documenta el lanzamiento histórico de `review-diff-real-01`
+desde su commit revisado limpio. **La campaña ya fue lanzada y terminó
+incompleta: no repetir ni reanudar estos comandos.** Su directorio original
+estaba ausente al preparar y documentar la segunda campaña; estos comandos
+no indican que sus archivos sigan disponibles.
 
 ```bash
 mkdir -p runs
@@ -231,7 +238,8 @@ por Álvaro, conservando los hashes e índices del juicio:
 - `caso_03`: fallo técnico por timeout, no un defecto omitido por el revisor.
 - `caso_04` a `caso_08`: sin ejecutar, no informes vacíos ni resultados negativos.
 
-La puntuación parcial conservada distingue cobertura y resultados evaluables:
+La puntuación parcial documentada históricamente distingue cobertura y resultados
+evaluables:
 
 | Magnitud | Recuento y denominador |
 | --- | --- |
@@ -267,9 +275,144 @@ sustituye una por otra. **No se pudo determinar la causa del timeout ni de
 la diferencia entre relojes con la evidencia conservada.** La lectura finalizada
 no permite atribuir la demora a `cat`, al modelo, al servicio o al anfitrión.
 
-Los originales permanecen en `runs/review-diff-real-01/`, fuera de Git:
-`preparacion/`, `lanzamiento/`, `juicios.json`, `puntuacion-parcial.json` y
-`resumen-adjudicacion-parcial.json`. Esta actualización publica solo evidencia
-agregada; no modifica los registros, el timeout ni la puntuación, no invoca
-modelos y no reanuda la campaña. Cualquier campaña nueva requiere autorización
-separada. Se conservan los ocho casos y sus expectativas; la PR sigue en borrador.
+La documentación histórica situó los originales en `runs/review-diff-real-01/`,
+fuera de Git: `preparacion/`, `lanzamiento/`, `juicios.json`,
+`puntuacion-parcial.json` y `resumen-adjudicacion-parcial.json`. La ruta indicada
+posteriormente fue `/tmp/cro-review-diff-evaluation/runs/review-diff-real-01/`.
+Ese directorio no estaba disponible al preparar ni al documentar la segunda
+campaña. Los resultados anteriores se conservan como evidencia histórica
+publicada en la PR #34; no se presentan como una nueva validación de archivos
+originales actualmente accesibles. No se recreó ni modificó aquella campaña.
+Cualquier campaña nueva requiere autorización separada.
+
+## Resultado parcial adjudicado: review-diff-real-02
+
+Se realizó un único lanzamiento con el protocolo y puntuador del commit
+`9685f4270158b0a716f6ab34c3326371208ce624`, desde un worktree en ese mismo SHA.
+Se conservaron los ocho casos, su orden y expectativas, el límite de **180 s
+por caso**, el máximo de ocho llamadas y una llamada por caso. Se registraron
+**siete invocaciones y cero reintentos**. El lanzamiento se detuvo ante el
+primer fallo técnico, en `caso_07`, y dejó `caso_08` sin ejecutar.
+
+### Preparación, comparación y procedencia
+
+Las ocho vistas previas se validaron con la CLI de producción y se compararon
+con una **reconstrucción reproducible del piloto desde Git**, usando
+`67e16983f511dedb04b81cddd5d3ecffb9a3156c`. Coincidieron el catálogo y su orden,
+los materiales, las instrucciones y el esquema de las ocho vistas. Como la
+ruta original de `review-diff-real-01` estaba ausente, esta comprobación no fue
+un cotejo directo con sus archivos archivados. La limitación quedó registrada
+en `validacion/resultado.json` de la segunda campaña.
+
+El manifiesto congela `timeout_diagnostics.py` entre las fuentes. La preparación
+pasó `validate_preparation(..., launching=True)` y el `check` documentado,
+ejecutado aparte con fixtures sintéticos y cero invocaciones. Las expectativas
+y adjudicaciones quedaron fuera del material entregado al revisor.
+
+Los seis informes disponibles se revisaron estáticamente contra contratos,
+base, candidato y expectativas congeladas. **Álvaro aprobó las seis decisiones
+procedentes del análisis asistido**: revisiones completas sin hallazgos para
+`caso_01`, `caso_04` y `caso_06`; hallazgo 1 respaldado y asignado a D1 para
+`caso_02`, `caso_03` y `caso_05`. Se conservaron índices y hashes de los hallazgos,
+la propuesta asistida original y una copia de `juicios.json` anterior a completarlo.
+`aprobacion-adjudicacion.json` vincula la aprobación humana, la procedencia
+asistida, los juicios y la puntuación mediante hashes. Los ejemplos de las
+justificaciones son razonados, no resultados de ejecutar candidatos.
+
+### Estado por caso y denominadores
+
+| Caso | Estado de la campaña | Invocaciones | Hallazgos del informe | Adjudicación o límite |
+| --- | --- | --- | --- | --- |
+| caso_01 | `informe_disponible` | 1 | 0 | Sin hallazgos; conserva selección inclusiva, orden y duplicados. |
+| caso_02 | `informe_disponible` | 1 | 1 | Respaldado, D1: pierde los recuentos repetidos. |
+| caso_03 | `informe_disponible` | 1 | 1 | Respaldado, D1: excluye los valores iguales al límite. |
+| caso_04 | `informe_disponible` | 1 | 0 | Sin hallazgos; conserva suma, negativos y vacío. |
+| caso_05 | `informe_disponible` | 1 | 1 | Respaldado, D1: `IndexError` en vacío en vez de `None`. |
+| caso_06 | `informe_disponible` | 1 | 0 | Sin hallazgos; conserva el mínimo de lotes mediante cociente y resto. |
+| caso_07 | `fallo_tecnico` | 1 | No hay informe | Timeout; caso no evaluable para calidad. |
+| caso_08 | `no_ejecutado` | 0 | No hay informe | Sin llamada; su defecto esperado queda no evaluable. |
+
+`run` terminó con **código 1**, estado `incompleta`: hubo seis informes de los
+ocho previstos. Después de la aprobación humana, `score` terminó con **código
+0**, estado `puntuacion_disponible`: pudo puntuar los seis informes adjudicados.
+Ese 0 corresponde a la operación de puntuación; no convierte el lanzamiento
+en completo ni acredita los dos casos no evaluables.
+
+| Magnitud | Recuento y denominador |
+| --- | --- |
+| Informes adjudicados | **6/8** casos planificados |
+| Cobertura de defectos | **3/4** defectos planificados; 1 no evaluable |
+| Cobertura de casos correctos | **3/4** correctos planificados; 1 no evaluable |
+| Defectos detectados | **3/3** defectos evaluables |
+| Defectos omitidos | **0/3** defectos evaluables |
+| Casos correctos con falsos hallazgos | **0/3** correctos evaluables; 0 falsos hallazgos |
+| Adicionales no respaldados | **0/3** hallazgos en casos defectuosos evaluables |
+| Adicionales respaldados | **0** entre 3 hallazgos evaluables |
+| Menciones duplicadas | **0** entre 3 menciones de D1 |
+| Juicios pendientes | **0/6** informes disponibles |
+| Fallos técnicos entre invocaciones realizadas | **1/7** invocaciones |
+| Fallos técnicos entre casos planificados | **1/8** casos |
+| Casos sin ejecutar | **1/8** casos planificados |
+
+Los recuentos proceden de `puntuacion-parcial.json`, contrastado con una nueva
+evaluación de los mismos juicios mediante el puntuador del SHA indicado.
+Coberturas y denominadores complementarios se derivan de esos recuentos y de
+las siete invocaciones archivadas. El correcto `caso_07` y el defecto de
+`caso_08` no se cuentan como éxitos, falsos ni omisiones del revisor.
+
+### Timeout de caso_07: mediciones conservadas
+
+El registro conserva literalmente estos valores:
+
+```text
+inicio_utc:                  2026-11-17T16:06:18.635577Z
+timeout_utc:                 2026-11-18T08:44:08.986383Z
+fin_utc:                     2026-11-18T08:44:09.003819Z
+limite_segundos:             180
+estado:                      tiempo_agotado
+codigo_salida:               -9
+duracion_segundos:           180.01876194499982
+duracion_monotonica_segundos: 180.001328714
+duracion_boottime_segundos:   59870.350848044
+ultimo_evento.tipo:          turn.started
+```
+
+Entre inicio UTC y detección hay **59870.350806 s**; hasta el fin UTC hay
+**59870.368242 s**. El intervalo hasta detección coincide aproximadamente con
+CLOCK_BOOTTIME, con una diferencia de **0.000042044 s**, unos 42 microsegundos.
+La duración monotónica del diagnóstico termina al detectar el timeout;
+`duracion_segundos` incluye la terminación del proceso. El último evento
+completo registrado fue `turn.started`, sin tipo de ítem; no consta una
+respuesta final ni `turn.completed` y `stderr` está vacío.
+
+**La causa del timeout y de la diferencia con el reloj monotónico sigue
+indeterminada.** La coincidencia aproximada de UTC y CLOCK_BOOTTIME es una
+observación; no establece una explicación causal. Cualquier explicación
+requeriría evidencia adicional y debe mantenerse como hipótesis.
+
+### Alcance y conservación de la evidencia
+
+Se observó más cobertura en la segunda campaña: **6/8** informes frente a
+**2/8** en la primera, y **3/4** frente a **1/4** en cada clase de casos.
+Son campañas independientes, con distintos denominadores evaluables. La
+diferencia observada **no demuestra un efecto causal del cambio de diagnóstico**
+ni una mejora del modelo; no es una comparación controlada.
+
+El alcance son **ocho ejemplos sintéticos pequeños de Python**, cuatro correctos
+y cuatro con un único defecto esperado. Una detección 3/3 entre los defectos
+evaluables no acredita el cuarto defecto, generalización a repositorios reales,
+fiabilidad global ni resultados en C++.
+
+En las siete invocaciones se registró `codex-cli 0.167.0`. La configuración
+solicitada no fijó modelo, proveedor ni esfuerzo; la preparación los registra
+como «no consta» en la configuración efectiva. Los eventos conservados tampoco
+acreditan esos parámetros efectivos. No se deducen de la versión de CLI ni de
+una configuración local observada, ni se presupone igualdad entre campañas.
+
+La evidencia de esta segunda campaña sigue exclusivamente en local, bajo
+`runs/review-diff-real-02/`: preparación y fuentes congeladas, validación,
+lanzamiento y reservas, propuesta asistida, copia previa de juicios,
+`juicios.json`, `aprobacion-adjudicacion.json` y `puntuacion-parcial.json`.
+Ambas campañas mantienen sus resultados separados y fuera de Git. Esta
+actualización documental utiliza sólo registros existentes: no modifica
+campañas, no reanuda lanzamientos ni realiza nuevas llamadas a modelos.
