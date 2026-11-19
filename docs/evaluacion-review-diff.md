@@ -3,10 +3,10 @@
 El protocolo y el corpus se incorporaron a `main` mediante la
 [PR #34](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/34),
 ya fusionada. Su preparación inicial se validó sin modelos. Después se
-autorizaron por separado las campañas `review-diff-real-01` y
-`review-diff-real-02`; sus resultados parciales y adjudicaciones aprobadas por
-Álvaro se documentan en secciones separadas. La segunda utiliza el diagnóstico
-de timeout incorporado en la
+autorizaron por separado las campañas `review-diff-real-01`,
+`review-diff-real-02` y `review-diff-real-03`; sus resultados y adjudicaciones
+aprobadas por Álvaro se documentan en secciones separadas. La segunda y la
+tercera utilizan el diagnóstico de timeout incorporado en la
 [PR #35](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/35),
 también fusionada. El modo C++ snapshot queda fuera.
 `review_diff.py` conserva su interfaz y su política Codex;
@@ -416,3 +416,128 @@ lanzamiento y reservas, propuesta asistida, copia previa de juicios,
 Ambas campañas mantienen sus resultados separados y fuera de Git. Esta
 actualización documental utiliza sólo registros existentes: no modifica
 campañas, no reanuda lanzamientos ni realiza nuevas llamadas a modelos.
+
+## Resultado completo adjudicado: review-diff-real-03
+
+La tercera campaña independiente se preparó y ejecutó desde un worktree en
+`9e3540f78ef7eb27432c7eba4e398c178c2dfbc5`, usando el protocolo y puntuador de
+ese mismo SHA. Se conservaron corpus, expectativas, orden, prompt y política
+del revisor. Las ocho vistas previas coincidieron con las de
+`review-diff-real-02`, incluidos materiales, instrucciones y esquema; también
+se comprobaron las fuentes de la política y el presupuesto congelado.
+
+Hubo **un único lanzamiento, ocho llamadas, una por caso y cero reintentos**,
+con el límite de **180 s por caso** y la detención ante el primer fallo técnico
+habilitada. `run` terminó con **código 0**, estado `completada`: produjo los
+ocho informes y no registró fallos técnicos ni timeouts. Ningún caso quedó sin
+ejecutar. Esta campaña ya tiene lanzamiento y no debe repetirse ni reanudarse.
+
+### Adjudicación humana con procedencia asistida
+
+Se validaron preparación, ocho registros, ocho respuestas, citas, reservas,
+índices y hashes. La propuesta de análisis asistido revisó cada informe contra
+contratos, base, candidato y expectativas de esta tercera campaña, sin ejecutar
+candidatos. Los ejemplos de sus justificaciones son razonados por inspección.
+
+**Álvaro aprobó las ocho decisiones**. `juicios.json` registra autor humano
+«Álvaro», ocho revisiones completas y las justificaciones específicas de esta
+campaña. Se conservó una copia previa en `juicios.antes-adjudicacion.json`.
+La propuesta original `propuesta-adjudicacion-asistida.json` permanece intacta;
+`aprobacion-adjudicacion.json` documenta su aprobación posterior y vincula por
+hashes propuesta, copia previa, juicios completados y puntuación.
+
+| Caso | Estado del lanzamiento | Llamadas | Hallazgos | Adjudicación aprobada |
+| --- | --- | --- | --- | --- |
+| caso_01 | `informe_disponible` | 1 | 0 | Sin hallazgos; selección inclusiva equivalente. |
+| caso_02 | `informe_disponible` | 1 | 1 | Hallazgo 1 respaldado, D1: pérdida de recuentos repetidos. |
+| caso_03 | `informe_disponible` | 1 | 1 | Hallazgo 1 respaldado, D1: exclusión del límite inclusivo. |
+| caso_04 | `informe_disponible` | 1 | 0 | Sin hallazgos; suma entera equivalente. |
+| caso_05 | `informe_disponible` | 1 | 1 | Hallazgo 1 respaldado, D1: `IndexError` para lista vacía. |
+| caso_06 | `informe_disponible` | 1 | 0 | Sin hallazgos; mínimo de lotes equivalente. |
+| caso_07 | `informe_disponible` | 1 | 0 | Sin hallazgos; partición conserva cero, orden, duplicados y vacío. |
+| caso_08 | `informe_disponible` | 1 | 1 | Hallazgo 1 respaldado, D1: división entera en vez de media real. |
+
+Después de esa aprobación, el comando `score` del SHA indicado terminó con
+**código 0**, estado `puntuacion_disponible`. Su salida se guardó directamente
+en `puntuacion.json` y se contrastó con un nuevo cálculo local sobre los mismos
+juicios: coincidió exactamente. El 0 de `run` acredita ocho informes disponibles;
+el 0 de `score` acredita una puntuación disponible con juicios aprobados.
+
+| Magnitud | Recuento y denominador |
+| --- | --- |
+| Informes adjudicados | **8/8** casos planificados |
+| Cobertura de defectos | **4/4** defectos planificados; 0 no evaluables |
+| Cobertura de casos correctos | **4/4** correctos planificados; 0 no evaluables |
+| Defectos detectados | **4/4** defectos evaluables |
+| Defectos omitidos | **0/4** defectos evaluables |
+| Casos correctos con falsos hallazgos | **0/4** correctos evaluables; 0 falsos hallazgos |
+| Adicionales no respaldados | **0/4** hallazgos en casos defectuosos evaluables |
+| Adicionales respaldados | **0** entre 4 hallazgos evaluables |
+| Menciones duplicadas | **0** entre 4 menciones de D1 |
+| Juicios pendientes | **0/8** informes disponibles |
+| Fallos técnicos entre casos planificados | **0/8** casos |
+| Fallos técnicos entre invocaciones realizadas | **0/8** invocaciones |
+| Casos sin ejecutar | **0/8** casos planificados |
+
+Las métricas de calidad proceden de la salida real del puntuador; las coberturas
+y denominadores complementarios se derivan de sus recuentos y del registro de
+invocaciones. No se añadieron resultados esperados manualmente a la puntuación.
+
+### Duración e inhibidor temporal observado
+
+Antes de las llamadas se comprobaron localmente `systemd-inhibit`, su versión
+y ayuda, y un proceso sintético corto acreditó adquisición de `sleep:idle` en
+modo `block`, observación del bloqueo activo y retirada al terminar. La prueba
+no llamó a modelos. Quedó registrada en `validacion/prueba-inhibidor.json`.
+
+El mismo mecanismo, `systemd-inhibit --what=sleep:idle --mode=block`, envolvió
+el supervisor que ejecutó `run` una sola vez. El bloqueo propio se observó antes
+de iniciar las llamadas, en **siete muestras durante el intervalo de `run`** y
+después de su retorno. Tras terminar el comando protegido se comprobó que ya
+no figuraba su inhibidor. La protección fue temporal, ligada a ese comando;
+no se hicieron cambios persistentes en la configuración energética.
+
+Las mediciones externas del intervalo de `run`, tomadas por el supervisor,
+fueron:
+
+| Reloj | Muestra de inicio | Muestra de fin | Duración derivada (s) |
+| --- | --- | --- | --- |
+| UTC | `2026-11-19T11:27:26.777801Z` | `2026-11-19T11:29:18.435418Z` | **111.657617** |
+| Monotónico | `35387.274569259` | `35498.932192576` | **111.657623317** |
+| CLOCK_BOOTTIME | `177934.663597988` | `178046.321221604` | **111.657623616** |
+
+Los valores corresponden al intervalo alrededor de la invocación de `run`,
+no a una suma de duraciones individuales de revisión. El comando completo,
+versiones, marcas y muestras se conservan en `validacion/ejecucion-inhibida.json`
+y `validacion/run-fin.json`; las observaciones periódicas están en
+`validacion/inhibidor-durante.jsonl`. Se registraron Python **3.12.3**, Git
+**2.43.0**, `codex-cli 0.167.0` y `systemd 255 (255.4-1ubuntu8.18)`.
+
+Modelo, proveedor y esfuerzo **efectivos: «no consta»**, conforme a los eventos
+y metadatos conservados en `validacion/configuracion-efectiva.json`. La
+configuración local declarada se registró por separado y no se usa como prueba
+de los parámetros efectivos del servicio. No se publican credenciales ni
+volcados completos de configuración.
+
+### Límites de la observación y conservación
+
+Las tres campañas mantienen resultados independientes y sus propios
+denominadores. Esta ejecución completa con inhibidor es una observación de
+un único lanzamiento: **no establece por sí sola la causa de los timeouts de
+las campañas anteriores ni una mejora de calidad del modelo**. La causa de
+aquellos timeouts sigue indeterminada. No hay una comparación controlada ni
+evidencia que acredite igualdad de configuración efectiva entre campañas.
+
+El alcance continúa siendo **ocho ejemplos sintéticos pequeños de Python**,
+cuatro correctos y cuatro con un defecto esperado. Los resultados adjudicados
+describen esos ocho ejemplos; no acreditan generalización a repositorios reales,
+fiabilidad global ni resultados en otros lenguajes.
+
+La evidencia de la tercera campaña permanece fuera de Git, separada bajo
+`runs/review-diff-real-03/`. Se conservan preparación y fuentes, ocho registros,
+respuestas y reservas, evidencia del inhibidor, propuesta asistida, copia previa,
+`juicios.json`, `aprobacion-adjudicacion.json` y `puntuacion.json`. El resumen de
+ejecución original se mantiene como registro anterior a la adjudicación; la
+aprobación posterior consta por separado. No se modifican las campañas anteriores.
+Esta publicación añade sólo el resumen documental, con cero llamadas nuevas
+a modelos, sin repetir ni reanudar ningún lanzamiento.
