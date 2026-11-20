@@ -351,7 +351,7 @@ class ReviewerConfigurationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     review_case.validate_codex_provider("fixture_provider")
                 with config.open("a") as stream:
-                    stream.write('[model_providers."fixture_provider"] # Real header\n')
+                    stream.write('[model_providers."fixture_provider"] # Proveedor válido; comentario privado\n')
                 review_case.validate_codex_provider("fixture_provider")
         config.write_text('#' + 'x' * (256 * 1024) + '\n[model_providers.fixture_provider]\n')
         with self.assertRaises(ValueError):

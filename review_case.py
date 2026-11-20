@@ -373,7 +373,7 @@ def validate_codex_provider(provider):
                 # Ignorar valores, comentarios y tablas ajenas; sólo analizar una cabecera.
                 if state is None and line.lstrip().startswith(b"["):
                     try:
-                        header = line.decode("ascii").split("#", 1)[0].strip()
+                        header = line.split(b"#", 1)[0].decode("ascii").strip()
                     except UnicodeError:
                         header = None
                     if header in (f"[model_providers.{provider}]", f'[model_providers."{provider}"]',
