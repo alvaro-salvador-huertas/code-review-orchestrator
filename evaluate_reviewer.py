@@ -89,15 +89,17 @@ def source_paths(root, *, version=repair_case.EVALUATION_VERSION):
     return sorted(paths)
 
 
-def requested_configuration():
+def requested_configuration(*, model=None, provider=None, reasoning_effort=None):
+    review_case.codex_model_options(model=model, provider=provider, reasoning_effort=reasoning_effort)
     return {
         "sandbox": "read-only", "approval_policy": "never", "web_search": "disabled",
         "features.multi_agent": False, "sesion": "nueva; --ephemeral; sin resume ni fork",
         "limite_agente_segundos": review_case.AGENT_TIMEOUT_SECONDS,
         "limite_consulta_cli_segundos": review_case.PREFLIGHT_TIMEOUT_SECONDS,
         "limite_pruebas_segundos": repair_case.TIMEOUT_SECONDS,
-        "modelo": "no fijado por el lanzador", "proveedor": "no fijado por el lanzador",
-        "esfuerzo": "no fijado por el lanzador",
+        "modelo": model if model is not None else "no fijado por el lanzador",
+        "proveedor": provider if provider is not None else "no fijado por el lanzador",
+        "esfuerzo": reasoning_effort if reasoning_effort is not None else "no fijado por el lanzador",
     }
 
 

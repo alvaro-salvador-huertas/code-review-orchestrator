@@ -156,9 +156,11 @@ class EvaluateReviewDiffTests(unittest.TestCase):
         on_invoke()
         final.write_bytes(review_diff.json_bytes({"resumen": "Respuesta simulada, no es un modelo.", "hallazgos": []}))
         (log / "codex_version.txt").write_text("fixture-cli\n")
-        return {"estado": "finalizada", "codigo_salida": 0, "invocaciones": 1,
-                "comando": ["codex", "exec", "--cd", str(work), "--output-schema",
-                            str(work / "respuesta.schema.json"), "--output-last-message", str(final)]}
+        process = {"estado": "finalizada", "codigo_salida": 0,
+                   "comando": ["codex", "exec", "--cd", str(work), "--output-schema",
+                               str(work / "respuesta.schema.json"), "--output-last-message", str(final)]}
+        (log / "resultado.json").write_bytes(review_diff.json_bytes(process))
+        return dict(process, invocaciones=1)
 
     def test_production_path_uses_review_diff_once_per_case_and_refuses_relaunch(self):
         evaluation.prepare(self.experiment, root=self.root)
