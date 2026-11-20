@@ -14,14 +14,17 @@ from evaluate_reviewer import (
 )
 from process_environment import process_environment
 import review_diff
+import reviewer_configuration as reviewer_config
+from review_case import REASONING_EFFORTS, validate_codex_provider
 
 
 PROJECT = Path(__file__).resolve().parent
 CORPUS = "evals/review_diff/casos.json"
 FIXTURES = "evals/review_diff/informes_sinteticos.json"
-SOURCES = tuple(dict.fromkeys((*RUNTIME_FILES, "review_diff.py", "evaluate_review_diff.py",
-                              "timeout_diagnostics.py", CORPUS, FIXTURES,
-                              "docs/evaluacion-review-diff.md")))
+LEGACY_SOURCES = tuple(dict.fromkeys((*RUNTIME_FILES, "review_diff.py", "evaluate_review_diff.py",
+                                     "timeout_diagnostics.py", CORPUS, FIXTURES,
+                                     "docs/evaluacion-review-diff.md")))
+SOURCES = (*LEGACY_SOURCES, "reviewer_configuration.py")
 IDS = [f"caso_{i:02d}" for i in range(1, 9)]
 ORIGIN = "evaluacion_diff_python_v1"
 
@@ -86,7 +89,9 @@ def preview(repo, case):
             "esquema": review_diff.response_schema(materials)}
 
 
-def prepare(output, root=PROJECT):
+def prepare(output, root=PROJECT, *, model=None, provider=None, reasoning_effort=None):
+    selected = reviewer_config.selection(model=model, provider=provider, reasoning_effort=reasoning_effort)
+    validate_codex_provider(provider)
     output, root = Path(output).absolute(), Path(root)
     data = catalog(root / CORPUS)
     output.mkdir(mode=0o700)  # Padre existente; no sustituir una preparación.
@@ -96,15 +101,16 @@ def prepare(output, root=PROJECT):
         path = frozen / "fuentes" / source
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(required_bytes(root / source))
+    save_json(frozen / "configuracion-revisor.json", reviewer_config.frozen_document(selected))
     record_git(root, frozen, SOURCES)
     commits = build_repository(frozen / "repo.git", data["casos"])
     for case in data["casos"]:
         require(commits[case["id"]] == case["commits"], "Los commits no coinciden con el catálogo")
         save_json(frozen / (case["id"] + ".json"), preview(frozen / "repo.git", case))
-    configuration = requested_configuration()
+    configuration = requested_configuration(**selected)
     configuration.update(limite_agente_segundos=review_diff.TIMEOUT, max_invocaciones=8,
                          max_por_caso=1, reintentos=0)
-    manifest = {"version": 1, "procedencia": ORIGIN, "estado": "preparada", "orden": IDS,
+    manifest = {"version": 2, "procedencia": ORIGIN, "estado": "preparada", "orden": IDS,
                 "configuracion_solicitada": configuration,
                 "configuracion_efectiva": effective_configuration(),
                 "sha256": snapshot_tree(frozen)}
@@ -114,22 +120,40 @@ def prepare(output, root=PROJECT):
 
 def validate_preparation(experiment, *, launching=False, root=PROJECT):
     manifest = read_json(experiment / "preparacion.json")
-    require(manifest["version"] == 1 and manifest["procedencia"] == ORIGIN and
+    require(type(manifest["version"]) is int and manifest["version"] in (1, 2) and manifest["procedencia"] == ORIGIN and
             manifest["estado"] == "preparada" and manifest["orden"] == IDS, "Preparación inválida")
     frozen = experiment / "preparacion"
     require(snapshot_tree(frozen) == manifest["sha256"], "Preparación alterada")
+    selected = frozen_selection(experiment, manifest)
+    if selected is not None:
+        expected = requested_configuration(**selected)
+        expected.update(limite_agente_segundos=review_diff.TIMEOUT, max_invocaciones=8,
+                        max_por_caso=1, reintentos=0)
+        require(manifest["configuracion_solicitada"] == expected,
+                "El manifiesto no coincide con la selección congelada o la política")
+        require(manifest["configuracion_efectiva"] == effective_configuration(),
+                "Una preparación sin ejecución no acredita parámetros efectivos")
     data = catalog(frozen / "fuentes" / CORPUS)
     for case in data["casos"]:
         require(read_json(frozen / (case["id"] + ".json")) == preview(frozen / "repo.git", case),
                 "Vista previa incoherente")
     if launching:
-        for source in SOURCES:
+        for source in SOURCES if selected is not None else LEGACY_SOURCES:
             require(required_bytes(Path(root) / source) == required_bytes(frozen / "fuentes" / source),
                     f"El lanzador o el corpus cambió desde la preparación: {source}")
     return manifest, data["casos"]
 
 
-def read_record(directory, prepared, mode):
+def frozen_selection(experiment, manifest):
+    path = experiment / "preparacion/configuracion-revisor.json"
+    if manifest["version"] == 1:
+        require(not path.exists(), "Selección nueva en una preparación histórica")
+        return None
+    require("configuracion-revisor.json" in manifest["sha256"], "Selección fuera del inventario")
+    return reviewer_config.validate_frozen(read_json(path))
+
+
+def read_record(directory, prepared, mode, *, selected=None):
     result = read_json(directory / "resultado.json")
     require(read_json(directory / "materiales.json") == prepared["materiales"] and
             read_json(directory / "respuesta.schema.json") == prepared["esquema"] and
@@ -148,6 +172,13 @@ def read_record(directory, prepared, mode):
     require(len(raw) <= review_diff.MAX_RESPONSE, "Respuesta demasiado grande")
     response = review_diff.validate_response(raw, prepared["materiales"])
     require(response == result["respuesta"], "Respuesta archivada inconsistente")
+    if selected is not None:
+        if mode == "real":
+            process = read_json(directory / "revisor/resultado.json")
+            require(process["comando"] == agent["comando"],
+                    "El comando original y el resumen del revisor no coinciden")
+        reviewer_config.validate_trace(result, selected, directory / "revisor/eventos.jsonl",
+                                       synthetic=(mode == "sintetico"))
     return response
 
 
@@ -164,6 +195,9 @@ def new_launch(experiment, mode):
 
 def run(experiment, root=PROJECT):
     manifest, cases = validate_preparation(experiment, launching=True, root=root)
+    selected = frozen_selection(experiment, manifest)
+    if selected is not None:
+        validate_codex_provider(selected["provider"])
     launch, result = new_launch(experiment, "real")
     baseline = None
     def check_closed():
@@ -180,9 +214,10 @@ def run(experiment, root=PROJECT):
             directory = launch / case["id"]
             try:
                 materials = read_json(experiment / "preparacion" / (case["id"] + ".json"))
-                record = review_diff.run_review(materials["materiales"], directory)
+                invocation = reviewer_config.invocation_options(selected) if selected is not None else {}
+                record = review_diff.run_review(materials["materiales"], directory, **invocation)
                 entry["invocaciones"] = (record.get("revisor") or {}).get("invocaciones")
-                read_record(directory, materials, "real")
+                read_record(directory, materials, "real", selected=selected)
                 signature = (normalized_command(record["revisor"]["comando"]),
                              required_bytes(directory / "revisor/codex_version.txt"))
                 if baseline is None:
@@ -218,7 +253,8 @@ def run(experiment, root=PROJECT):
 
 
 def archives(experiment):
-    _, cases = validate_preparation(experiment)
+    manifest, cases = validate_preparation(experiment)
+    selected = frozen_selection(experiment, manifest)
     launch = read_json(experiment / "lanzamiento/resultado.json")
     require(launch["version"] == 1 and launch["modo"] in ("real", "sintetico") and
             [c["id"] for c in launch["casos"]] == IDS and launch["preparacion_sha256"] ==
@@ -233,7 +269,7 @@ def archives(experiment):
                 directory = experiment / "lanzamiento" / case["id"]
                 require(snapshot_tree(directory) == item["sha256"], "Informe alterado o incompleto")
                 response = read_record(directory, read_json(experiment / "preparacion" /
-                                       (case["id"] + ".json")), launch["modo"])
+                                       (case["id"] + ".json")), launch["modo"], selected=selected)
                 state = "informe_disponible"
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 state, error = "fallo_tecnico", str(exc)
@@ -329,7 +365,8 @@ def score(experiment, judgments):
 
 
 def check(output, root=PROJECT):
-    prepare(output, root)
+    manifest = prepare(output, root)
+    selected = frozen_selection(output, manifest)
     launch, result = new_launch(output, "sintetico")
     fixtures = read_json(output / "preparacion/fuentes" / FIXTURES)
     require(fixtures["version"] == 1 and fixtures["procedencia"] == "fixture_sintetico" and
@@ -346,10 +383,14 @@ def check(output, root=PROJECT):
         save_json(directory / "respuesta.schema.json", materials["esquema"])
         (directory / "instrucciones.txt").write_text(materials["instrucciones"], encoding="utf-8")
         save_json(directory / "revisor/respuesta_original.json", fixture["respuesta"])
-        save_json(directory / "resultado.json", {"estado": "informe_disponible",
+        record = {"estado": "informe_disponible",
                   "revision_humana": "pendiente", "pruebas_ejecutadas": False,
                   "respuesta": fixture["respuesta"], "revisor": {"estado": "finalizada",
-                  "codigo_salida": 0, "invocaciones": 0, "procedencia": "fixture_sintetico"}})
+                  "codigo_salida": 0, "invocaciones": 0, "procedencia": "fixture_sintetico"},
+                  "version_registro": 2}
+        record["configuracion_revisor"] = reviewer_config.trace(selected, record["revisor"],
+                                                               directory / "revisor/eventos.jsonl", synthetic=True)
+        save_json(directory / "resultado.json", record)
         entry["sha256"] = snapshot_tree(directory)
     result["estado"] = "fixtures_preparados"
     save_json(launch / "resultado.json", result)
@@ -371,6 +412,10 @@ def main(argv=None):
     for name in ("prepare", "check"):
         p = commands.add_parser(name)
         p.add_argument("--output", type=Path, required=True, help="Directorio nuevo; padre existente")
+        if name == "prepare":
+            p.add_argument("--model", help="Identificador explícito de modelo")
+            p.add_argument("--provider", help="ID de proveedor ya configurado en Codex")
+            p.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     for name in ("run", "judgments", "score"):
         p = commands.add_parser(name)
         p.add_argument("--experiment", type=Path, required=True)
@@ -384,7 +429,8 @@ def main(argv=None):
     try:
         if args.operation in ("prepare", "check"):
             output = args.output.absolute()
-            result = prepare(output) if args.operation == "prepare" else check(output)
+            result = prepare(output, model=args.model, provider=args.provider,
+                             reasoning_effort=args.reasoning_effort) if args.operation == "prepare" else check(output)
         else:
             experiment = args.experiment.resolve(strict=True)
             if args.operation == "run":

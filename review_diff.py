@@ -12,7 +12,8 @@ import tempfile
 from case_evidence import digest, parse_json, require, snapshot_tree
 from process_environment import process_environment
 from repair_case import ProcessInterrupted, timestamp
-from review_case import invoke_reviewer
+from review_case import REASONING_EFFORTS, invoke_reviewer, validate_codex_provider
+import reviewer_configuration as reviewer_config
 
 
 OID = re.compile(r"(?:[a-f0-9]{40}|[a-f0-9]{64})")
@@ -190,12 +191,16 @@ def validate_response(raw, materials):
     return value
 
 
-def run_review(materials, output):
+def run_review(materials, output, *, model=None, provider=None, reasoning_effort=None):
+    selected = reviewer_config.selection(model=model, provider=provider, reasoning_effort=reasoning_effort)
+    validate_codex_provider(provider)
     output.mkdir(mode=0o700)  # Exclusivo, sin crear ni sustituir el directorio padre.
     log = output / "revisor"
     log.mkdir(mode=0o700)
     result = {"estado": "fallo_tecnico", "revision_humana": "pendiente",
-              "pruebas_ejecutadas": False, "respuesta": None, "revisor": None}
+              "pruebas_ejecutadas": False, "respuesta": None, "revisor": None,
+              "version_registro": 2,
+              "configuracion_revisor": reviewer_config.trace(selected, {}, log / "eventos.jsonl")}
     evidence = {"materiales.json": json_bytes(materials),
                 "respuesta.schema.json": json_bytes(response_schema(materials))}
     prompt = review_prompt(materials)
@@ -215,8 +220,13 @@ def run_review(materials, output):
                 (work / name).write_bytes(data)
             initial = snapshot_tree(work)
             agent = invoke_reviewer(work, raw_response, prompt.encode("utf-8"), log,
-                                    on_invoke=reserve, timeout=TIMEOUT, timeout_diagnostics=True)
+                                    on_invoke=reserve, timeout=TIMEOUT, timeout_diagnostics=True,
+                                    **reviewer_config.invocation_options(selected))
             result["revisor"] = agent
+            result["configuracion_revisor"] = reviewer_config.trace(selected, agent, log / "eventos.jsonl")
+            if agent.get("invocaciones") == 1:
+                require(result["configuracion_revisor"]["argumentos_cli"] == reviewer_config.options(selected),
+                        "Los argumentos enviados no coinciden con la selección solicitada")
             require(snapshot_tree(work) == initial, "Materiales modificados durante la revisión")
         if agent["estado"] == "finalizada" and agent["codigo_salida"] == 0:
             require(agent["invocaciones"] == 1 and (output / "reserva.json").is_file(),
@@ -228,6 +238,7 @@ def run_review(materials, output):
             result["estado"] = "informe_disponible"
     except ProcessInterrupted as exc:
         result.update(estado="interrumpida", revisor=exc.result)
+        result["configuracion_revisor"] = reviewer_config.trace(selected, exc.result, log / "eventos.jsonl")
     except (OSError, ValueError) as exc:
         result["detalle"] = str(exc)
     (output / "resultado.json").write_bytes(json_bytes(result))
@@ -246,6 +257,9 @@ def main(argv=None):
     parser.add_argument("--invoke-model", action="store_true",
                         help="Autoriza enviar los materiales seleccionados a Codex")
     parser.add_argument("--output", type=Path, help="Directorio nuevo para el registro privado")
+    parser.add_argument("--model", help="Identificador explícito de modelo")
+    parser.add_argument("--provider", help="ID de proveedor ya configurado en Codex; no admite URLs ni definiciones")
+    parser.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     args = parser.parse_args(argv)
     if args.base is not None and args.candidate is None:
         parser.error("--base requiere --candidate")
@@ -254,18 +268,24 @@ def main(argv=None):
     if args.invoke_model != (args.output is not None):
         parser.error("--invoke-model y --output deben usarse juntos")
     try:
+        selected = reviewer_config.selection(model=args.model, provider=args.provider,
+                                              reasoning_effort=args.reasoning_effort)
+        validate_codex_provider(args.provider)
         repo = args.repo.resolve(strict=True)
         if args.snapshot is not None:
             materials = prepare_snapshot(repo, args.snapshot, args.file, args.criterion)
         else:
             materials = prepare(repo, args.base, args.candidate, args.file, args.criterion)
         if not args.invoke_model:
-            sys.stdout.buffer.write(json_bytes({
+            preview = {
                 "estado": "vista_previa_sin_modelo", "materiales": materials,
                 "instrucciones": review_prompt(materials), "esquema": response_schema(materials),
-            }))
+            }
+            if reviewer_config.invocation_options(selected):
+                preview["seleccion_revisor"] = reviewer_config.frozen_document(selected)
+            sys.stdout.buffer.write(json_bytes(preview))
             return 0
-        result = run_review(materials, args.output.absolute())
+        result = run_review(materials, args.output.absolute(), **reviewer_config.invocation_options(selected))
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         print(f"review_diff: {exc}", file=sys.stderr)
         return 2

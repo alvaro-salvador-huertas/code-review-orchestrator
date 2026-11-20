@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -299,25 +300,96 @@ def validate_verdict(raw, line_count):
     return verdict
 
 
-def codex_model_options(*, model=None, reasoning_effort=None):
+def codex_model_options(*, model=None, reasoning_effort=None, provider=None):
     """Validar selecciones explícitas sin consultar modelos ni configuración personal."""
     require(model is None or (type(model) is str and
             re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model)),
             "Modelo inválido: usa un identificador de hasta 200 caracteres ASCII, sin espacios ni opciones")
     require(reasoning_effort is None or (type(reasoning_effort) is str and reasoning_effort in REASONING_EFFORTS),
             "Esfuerzo no admitido: " + ", ".join(REASONING_EFFORTS))
+    require(provider is None or (type(provider) is str and
+            re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", provider)),
+            "Proveedor inválido: indica sólo un ID de configuración existente, de hasta 64 caracteres ASCII")
     options = []
     if model is not None:
         options += ["--model", model]
     if reasoning_effort is not None:
         options += ["--config", "model_reasoning_effort=" + json.dumps(reasoning_effort)]
+    if provider is not None:
+        options += ["--config", "model_provider=" + json.dumps(provider)]
     return options
 
 
+def _toml_string_state(line, state):
+    """Ignorar cabeceras aparentes dentro de cadenas, sin interpretar valores."""
+    index = 0
+    while index < len(line):
+        if state is None:
+            if line[index:index + 1] == b"#":
+                break
+            if line[index:index + 1] not in (b"'", b'"'):
+                index += 1
+                continue
+            quote = line[index:index + 1]
+            state = quote * 3 if line[index:index + 3] == quote * 3 else quote
+            index += len(state)
+        elif state.startswith(b'"') and line[index:index + 1] == b"\\":
+            index += 2
+        elif line[index:index + len(state)] == state:
+            index += len(state)
+            if len(state) == 3:
+                while line[index:index + 1] == state[:1]:
+                    index += 1
+            state = None
+        else:
+            index += 1
+    return state
+
+
+def validate_codex_provider(provider):
+    """Sólo IDs de tablas existentes; no interpretar ni conservar sus valores.
+
+    OpenAI es incorporado. Para IDs personalizados se inspeccionan únicamente
+    cabeceras estándar [model_providers.ID] en una lectura acotada del archivo
+    de usuario que la CLI recibirá. La definición y autenticación quedan en Codex.
+    Los lectores de registros históricos no necesitan esta consulta local.
+    """
+    codex_model_options(provider=provider)
+    if provider is None or provider == "openai":
+        return
+    home = Path(os.environ.get("CODEX_HOME") or Path(os.environ.get("HOME") or Path.home()) / ".codex")
+    path = home / "config.toml"
+    remaining = 256 * 1024
+    state = None
+    try:
+        with path.open("rb") as stream:
+            while remaining:
+                line = stream.readline(min(remaining, 4096))
+                if not line:
+                    break
+                remaining -= len(line)
+                if not line.endswith(b"\n") and (len(line) == 4096 or not remaining):
+                    break  # No reconocer cabeceras tras valores que no se pudieron inspeccionar.
+                # Ignorar valores, comentarios y tablas ajenas; sólo analizar una cabecera.
+                if state is None and line.lstrip().startswith(b"["):
+                    try:
+                        header = line.decode("ascii").split("#", 1)[0].strip()
+                    except UnicodeError:
+                        header = None
+                    if header in (f"[model_providers.{provider}]", f'[model_providers."{provider}"]',
+                                  f"[model_providers.'{provider}']"):
+                        return
+                state = _toml_string_state(line, state)
+    except OSError:
+        pass
+    raise ValueError("Proveedor no configurado mediante una tabla [model_providers.ID] de usuario: " + provider)
+
+
 def invoke_reviewer(workspace, final_path, prompt, log_dir, *, on_invoke=None, timeout=None,
-                    model=None, reasoning_effort=None, timeout_diagnostics=False):
+                    model=None, reasoning_effort=None, timeout_diagnostics=False, provider=None):
     """Una sesión nueva de Codex: sin resume, fork ni llamada al desarrollador."""
-    options = codex_model_options(model=model, reasoning_effort=reasoning_effort)
+    options = codex_model_options(model=model, reasoning_effort=reasoning_effort, provider=provider)
+    validate_codex_provider(provider)
     result = {"estado": "cli_no_disponible", "codigo_salida": None, "invocaciones": 0}
     for name, args in (("version", ["--version"]), ("ayuda", ["exec", "--help"])):
         check = run_process([CODEX_EXECUTABLE] + args, workspace, log_dir / name,

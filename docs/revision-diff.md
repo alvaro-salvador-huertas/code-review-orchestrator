@@ -2,8 +2,8 @@
 
 El [protocolo de evaluación con ocho diffs Python](evaluacion-review-diff.md)
 prepara casos congelados, vistas previas y puntuación con juicio humano. Su modo
-de comprobación usa informes sintéticos; la campaña con modelo queda pendiente
-de revisar los casos y expectativas.
+de comprobación usa informes sintéticos; cada campaña con modelo requiere
+revisar los casos y expectativas y autorizar su lanzamiento por separado.
 
 `review_diff.py` revisa un cambio que ya existe en Git. No inicia desarrollo,
 no requiere que falle la aceptación y no incorpora ningún cambio. El flujo
@@ -49,6 +49,89 @@ original, eventos, diagnósticos y `resultado.json`. No publiques el registro.
 Un código 0 en este modo significa informe disponible, incluso si contiene
 hallazgos; no equivale a aprobación. Un 1 indica fallo de revisión, un 2 indica
 entrada u operación inválida y un 130 indica interrupción del revisor.
+
+## Selección explícita y trazabilidad del revisor
+
+`--model`, `--provider` y `--reasoning-effort` son opcionales tanto en la vista
+previa como en la revisión. Si se omiten, no se envían opciones de selección:
+se conserva la resolución habitual de Codex. No cambia el prompt, los materiales,
+el esquema, la política de aprobación `never`, el aislamiento ni el límite de
+180 s. La vista previa sin opciones conserva su formato; con opciones añade
+`seleccion_revisor` fuera de los materiales enviados al revisor.
+
+Ejemplo **ilustrativo**, sin invocación: `modelo-ejemplo` y `proveedor_ejemplo`
+no identifican un modelo o servicio recomendado. Sustitúyelos por identificadores
+que admita tu instalación; el proveedor debe existir previamente.
+
+```bash
+python3 -B review_diff.py "${revision[@]}" \
+  --model modelo-ejemplo --provider proveedor_ejemplo --reasoning-effort high
+# Tras revisar la vista y autorizar el envío, las mismas opciones pueden acompañar
+# --invoke-model --output runs/una-revision-nueva en un directorio nuevo.
+```
+
+Se reutilizan las validaciones de `codex_model_options()`: el modelo es un ID
+ASCII de hasta 200 caracteres y el esfuerzo debe pertenecer a
+`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` o `ultra`. La aceptación
+del esfuerzo por un modelo concreto depende de Codex y del servicio.
+El proveedor admite un ID ASCII de hasta 64 caracteres, comenzando por letra
+o `_` y continuando con letras, dígitos, `_` o `-`; no admite URLs, definiciones,
+perfiles ni fragmentos de configuración.
+
+`openai` es el ID incorporado. Para otro ID se comprueba una cabecera estándar
+`[model_providers.ID]` (también con el ID entre comillas simples o dobles) en
+`$CODEX_HOME/config.toml`, o `~/.codex/config.toml` si no se fija `CODEX_HOME`.
+La comprobación inspecciona como máximo 256 KiB, con líneas de hasta 4096 bytes,
+sin interpretar ni registrar los valores privados. Descarta cabeceras aparentes
+dentro de cadenas multilínea; si se supera el límite antes de encontrar la tabla,
+rechaza la selección. No busca definiciones en otros archivos o en perfiles.
+Codex sigue siendo responsable de validar la definición y su autenticación.
+Sin proveedor explícito no se consulta ese archivo. Los argumentos inválidos
+se rechazan antes de crear la salida o reservar una llamada.
+
+La interfaz se comprobó sin modelos con `codex --version`, `codex --help` y
+`codex exec --help` de **codex-cli 0.170.0**. Se construyen listas de argumentos:
+`--model ID`, `--config 'model_reasoning_effort="high"'` y
+`--config 'model_provider="ID"'`. El último mecanismo corresponde a la
+[configuración oficial de proveedores](https://developers.openai.com/codex/config-advanced/);
+véanse también la [referencia de configuración](https://developers.openai.com/codex/config-reference/)
+y la [referencia de CLI](https://developers.openai.com/codex/cli/reference/).
+Las comprobaciones locales de versión y ayuda siguen precediendo cada llamada.
+
+Los nuevos `resultado.json` tienen `version_registro: 2` y un objeto
+`configuracion_revisor` con tres evidencias separadas:
+
+- `solicitada`: los valores elegidos, o `no fijado por el lanzador` para cada
+  opción omitida.
+- `argumentos_cli`: las opciones de selección extraídas del comando realmente
+  enviado. El comando completo queda en `revisor.comando` y en
+  `revisor/resultado.json`; una selección solicitada sin ejecución no produce
+  argumentos enviados.
+- `efectiva`: modelo, proveedor y esfuerzo como `no consta` salvo evidencia
+  explícita de ejecución, con `procedencia` por campo. Una opción enviada no
+  demuestra qué aplicó el servicio.
+
+El lector inspecciona como máximo el primer MiB de `revisor/eventos.jsonl`,
+con líneas de hasta 64 KiB. Solo acredita campos estructurados de un evento
+`response.completed`: `response.model`, `response.provider` y
+`response.reasoning.effort`. Esta CLI puede no emitirlos, y `provider` es
+opcional: no se presupone su presencia ni se deduce del modelo. La procedencia
+conserva únicamente archivo, línea, tipo de evento, campo y valor. No acredita
+opciones de `session_configured`, texto libre de ítems ni parámetros solicitados.
+Los campos inválidos, ausentes o contradictorios quedan `no consta`. No se
+copian cuerpos de respuesta, credenciales ni configuración privada al resumen.
+Un fallo auxiliar de lectura no cambia el resultado del proceso.
+
+Por ejemplo, esta parte de un **registro sintético** representa opciones
+enviadas sin evidencia de parámetros efectivos:
+
+```json
+{
+  "solicitada": {"modelo": "modelo-ejemplo", "proveedor": "openai", "esfuerzo": "high"},
+  "argumentos_cli": ["--model", "modelo-ejemplo", "--config", "model_reasoning_effort=\"high\"", "--config", "model_provider=\"openai\""],
+  "efectiva": {"modelo": "no consta", "proveedor": "no consta", "esfuerzo": "no consta", "procedencia": []}
+}
+```
 
 ## Diagnóstico opcional del timeout
 

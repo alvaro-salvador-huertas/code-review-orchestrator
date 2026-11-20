@@ -93,6 +93,54 @@ se añaden al material. Esta separación de contexto no convierte el modo Codex 
 solo lectura en una garantía de confidencialidad frente a un agente que incumpla
 las instrucciones; se conserva el alcance del [piloto](revision-diff.md).
 
+## Selección congelada para campañas nuevas
+
+`prepare` admite las opciones `--model`, `--provider` y `--reasoning-effort`
+descritas en [la selección del revisor](revision-diff.md#selección-explícita-y-trazabilidad-del-revisor).
+Este ejemplo **ilustrativo** solo prepara archivos: los IDs `modelo-ejemplo` y
+`proveedor_ejemplo` deben sustituirse por los admitidos por la instalación, con
+el proveedor ya configurado. Preparar no llama a Codex ni reserva llamadas.
+
+```bash
+python3 -B evaluate_review_diff.py prepare --output runs/campana-nueva \
+  --model modelo-ejemplo --provider proveedor_ejemplo --reasoning-effort high
+# Revisar las ocho vistas y autorizar por separado antes de ejecutar:
+# python3 -B evaluate_review_diff.py run --experiment runs/campana-nueva --invoke-model
+```
+
+El nuevo manifiesto `preparacion.json` usa **versión 2**. Congela la selección en
+`preparacion/configuracion-revisor.json` (formato propio versión 1), incluido en
+su inventario SHA-256 junto con las fuentes, incluido `reviewer_configuration.py`.
+Ese archivo conserva `seleccion` con `model`, `provider` y `reasoning_effort`
+(valor `null` si se omitieron) y la lista `argumentos_cli` que corresponde a ella.
+El manifiesto conserva además la configuración solicitada; los parámetros
+efectivos de la preparación son siempre `no consta`. Las vistas, los materiales,
+el corpus, las expectativas, el orden y las instrucciones no cambian.
+Se congelan los IDs seleccionados; no se copia la definición privada del
+proveedor ni se resuelven los valores predeterminados que herede Codex.
+
+`run` utiliza esa selección para los ocho casos y no admite opciones para
+sobrescribirla. Antes de reservar el lanzamiento comprueba hashes, coherencia
+entre selección y manifiesto, fuentes congeladas y disponibilidad local del ID
+de proveedor explícito. Tras cada revisión contrasta sus argumentos con la
+selección congelada y con el comando del registro original del proceso. Una
+incoherencia es un fallo técnico y detiene la campaña. Se conserva el presupuesto
+de ocho llamadas, una por caso, 180 s y cero reintentos.
+
+Cada registro nuevo separa configuración solicitada, opciones realmente
+enviadas y parámetros efectivos con procedencia, según el formato documentado
+en `revision-diff.md`. La igualdad de argumentos no implica igualdad de
+parámetros aplicados por el servicio. En ausencia de evidencia estructurada
+siguen figurando como `no consta`.
+
+La lectura de archivos conservados, `judgments` y `score` admiten los manifiestos
+de **versión 1**, que no contienen el nuevo archivo ni los nuevos campos del
+registro. No se infieren selecciones ni parámetros efectivos retrospectivos,
+no se modifican esas preparaciones y no se exige disponer del proveedor local
+para puntuarlas. El lanzamiento exige las fuentes del protocolo congelado;
+no se utiliza el código nuevo para relanzar o reanudar campañas históricas.
+Las tres campañas documentadas a continuación conservan su formato y resultados.
+
 ## Comando y reserva de la campaña real
 
 Esta secuencia documenta el lanzamiento histórico de `review-diff-real-01`
@@ -127,7 +175,8 @@ No se reemplaza evidencia de una ejecución anterior.
 
 Se registra la configuración solicitada y la versión/argumentos observados de
 CLI; se exige continuidad de estos últimos. `review_diff` no fija modelo,
-proveedor o esfuerzo: pueden proceder de la configuración Codex personal. Los
+proveedor o esfuerzo en estas campañas históricas ni cuando se omiten las nuevas
+opciones: pueden proceder de la configuración Codex personal. Los
 parámetros efectivos quedan «no consta» salvo evidencia de los eventos; no se
 leen ni publican credenciales. El protocolo es repetible, no una promesa de
 determinismo del servicio ni de igualdad de parámetros efectivos.
