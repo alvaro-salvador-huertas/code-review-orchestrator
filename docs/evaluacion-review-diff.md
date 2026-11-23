@@ -650,3 +650,35 @@ sintéticos del corpus y el intervalo medido describe ese lanzamiento.
 La evidencia local incluye la preparación, los registros, el resumen
 operativo, las mediciones del inhibidor, los juicios, la constancia de
 aprobación y la salida original de `score`.
+
+## Piloto adjudicado de cuatro cambios históricos
+
+`piloto-review-diff-historico-01` revisó cuatro cambios reales desde
+`fb67b98c649413d4ff8b2c98281daf69d0197344`. Cada vista incluyó un archivo
+Python modificado, sus versiones base y candidata, el diff y criterios
+explícitos. Las expectativas y las pruebas históricas se consultaron durante
+la adjudicación asistida, que Álvaro aprobó después.
+
+| Caso y archivo | Base y candidato | Resultado adjudicado y antecedente |
+| --- | --- | --- |
+| 01 · Orquestador · `booking_batch.py` | [Base `8e6415f`](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/commit/8e6415f117d1056f560801574297890d5ead9e17) · [Candidato `9318c5b`](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/commit/9318c5b02c20daa7362194f40a2e4c2ee36ce38d) | Sin hallazgos en el recorte de lectura y publicación del lote. [PR #25](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/25) |
+| 02 · ShiftLab · `experiments/abstention.py` | [Base `67d8d23`](https://github.com/alvaro-salvador-huertas/shift-lab/commit/67d8d230e61737f741d0c5ed4f648699abadcdc5) · [Candidato `67c6756`](https://github.com/alvaro-salvador-huertas/shift-lab/commit/67c67567ad0a8b92dce674350613f94a271b5436) | Un hallazgo respaldado. Un fallo de codificación UTF-8 durante la escritura puede dejar artefactos parciales. [Corrección `5608f77`](https://github.com/alvaro-salvador-huertas/shift-lab/commit/5608f77f7d7e4f25d02d0bfb27bb1a758f620da8) |
+| 03 · Orquestador · `inspect_run.py` | [Base `c8a38c9`](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/commit/c8a38c9bfb7d8105371567d8b7a6854d1f048d33) · [Candidato `7bcf3e3`](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/commit/7bcf3e35752f6819958fe65926e5141fbe2b0e75) | Sin hallazgos en el recorte de avisos AST del modo JSON. [PR #9](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/9) |
+| 04 · Orquestador · `plan_project.py` | [Base `faed5dd`](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/commit/faed5ddb655500e7e81350301cc3b8d625bf1f5b) · [Candidato `19b7b2f`](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/commit/19b7b2f65d5bb3f6ab8cc8a5ebfa573bc486ccdf) | Sin hallazgos en el recorte de entrega de materiales al planificador. [PR #17](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/17) |
+
+Álvaro confirmó que habría pedido cambios antes de fusionar el commit
+intermedio de ShiftLab. Por inspección, el candidato crea el destino antes
+de codificar los archivos, y la corrección codifica primero. Su prueba
+histórica introduce un sustituto Unicode aislado en el contenido JSON y
+exige un diagnóstico y la ausencia del destino. La variante del informe
+con un nombre de archivo POSIX quedó **no verificada**.
+[Prueba histórica de ShiftLab](https://github.com/alvaro-salvador-huertas/shift-lab/blob/5608f77f7d7e4f25d02d0bfb27bb1a758f620da8/tests/test_abstention_from_results.py#L105-L122)
+
+Hubo **4/4 intentos autorizados**, **4/4 informes válidos**, **0/4 fallos
+técnicos** y cero reintentos. Se detectó **1/1 regresión conocida evaluable**
+y hubo **0/3 casos correctos evaluables con hallazgos no respaldados**.
+El piloto cubre cuatro recortes seleccionados y su adjudicación fue estática.
+Las cifras describen esos recortes y el ahorro de tiempo queda **«no medido»**.
+Se enviaron los argumentos de la selección `gpt-6.1-sol`, `openai`, `high`.
+Modelo, proveedor y esfuerzo efectivos figuran como **«no consta»**.
+Los informes y registros de adjudicación se conservan en local, fuera de Git.
