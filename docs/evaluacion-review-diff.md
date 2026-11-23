@@ -3,10 +3,10 @@
 El protocolo y el corpus se incorporaron a `main` mediante la
 [PR #34](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/34),
 ya fusionada. Su preparación inicial se validó sin modelos. Después se
-autorizaron por separado las campañas `review-diff-real-01`,
-`review-diff-real-02` y `review-diff-real-03`; sus resultados y adjudicaciones
-aprobadas por Álvaro se documentan en secciones separadas. La segunda y la
-tercera utilizan el diagnóstico de timeout incorporado en la
+autorizaron por separado cuatro campañas, de `review-diff-real-01` a
+`review-diff-real-04`. Cada sección recoge los resultados y la adjudicación
+aprobada por Álvaro. A partir de la segunda se utiliza el diagnóstico de
+timeout incorporado en la
 [PR #35](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/35),
 también fusionada. El modo C++ snapshot queda fuera.
 `review_diff.py` conserva su interfaz y su política Codex;
@@ -139,7 +139,8 @@ registro. No se infieren selecciones ni parámetros efectivos retrospectivos,
 no se modifican esas preparaciones y no se exige disponer del proveedor local
 para puntuarlas. El lanzamiento exige las fuentes del protocolo congelado;
 no se utiliza el código nuevo para relanzar o reanudar campañas históricas.
-Las tres campañas documentadas a continuación conservan su formato y resultados.
+Las campañas 01 a 03 conservan su formato y resultados históricos. La campaña
+04 utiliza el manifiesto de versión 2 con selección explícita.
 
 ## Comando y reserva de la campaña real
 
@@ -590,3 +591,62 @@ ejecución original se mantiene como registro anterior a la adjudicación; la
 aprobación posterior consta por separado. No se modifican las campañas anteriores.
 Esta publicación añade sólo el resumen documental, con cero llamadas nuevas
 a modelos, sin repetir ni reanudar ningún lanzamiento.
+
+## Resultado completo adjudicado: review-diff-real-04
+
+La cuarta campaña se lanzó el 21 de noviembre de 2026 desde
+`3800d587353c409c953ad9daf790c12c42924c99`, el merge de la
+[PR #38](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/38).
+La preparación usó un manifiesto de versión 2. Sus ocho vistas previas
+coincidieron con los materiales, las instrucciones y el esquema originales
+conservados de la campaña 03. El corpus y las expectativas también coincidieron.
+
+Codex CLI 0.170.0 recibió en los ocho casos los argumentos congelados de la
+selección solicitada (`gpt-6.1-sol`, `openai`, `high`).
+
+```bash
+--model gpt-6.1-sol \
+--config 'model_reasoning_effort="high"' \
+--config 'model_provider="openai"'
+```
+
+Los parámetros efectivos de modelo, proveedor y esfuerzo figuran como
+**«no consta»** en los ocho registros, al faltar la evidencia estructurada que
+requiere el protocolo.
+
+El lanzamiento terminó con código 0 y estado `completada`. Las ocho
+invocaciones entregaron informes válidos en un único lanzamiento, con una
+invocación por caso y cero reintentos. El inhibidor `sleep:idle` en modo
+`block` se observó en diez muestras y se comprobó su retirada. La duración
+externa fue **98,36 s** por reloj monotónico e incluye las comprobaciones
+previas y el lanzamiento. Los intervalos UTC y `CLOCK_BOOTTIME` también
+redondean a 98,36 s.
+
+Álvaro aprobó el análisis asistido de los ocho informes. Los casos 01, 04,
+06 y 07 se adjudicaron sin hallazgos. En los casos 02, 03, 05 y 08, el
+hallazgo 1 se adjudicó como respaldado y correspondiente a D1. La
+revalidación comprobó citas, índices y hashes. Para puntuar se utilizaron
+las fuentes archivadas del protocolo, verificadas byte por byte contra
+Git. `score` devolvió código 0 y estado `puntuacion_disponible`.
+
+| Magnitud | Recuento y denominador |
+| --- | --- |
+| Informes válidos y casos puntuados | **8/8** planificados |
+| Cobertura de casos con defecto | **4/4** planificados |
+| Cobertura de casos correctos | **4/4** planificados |
+| Defectos detectados | **4/4** evaluables |
+| Defectos omitidos | **0/4** evaluables |
+| Casos correctos con falsos hallazgos | **0/4** evaluables, con 0 hallazgos falsos |
+| Adicionales no respaldados | **0/4** hallazgos en casos con defecto |
+| Adicionales respaldados | **0/4** hallazgos evaluados |
+| Menciones duplicadas | **0/4** menciones de D1 |
+| Juicios pendientes | **0/8** informes |
+| Fallos técnicos | **0/8** casos y **0/8** invocaciones |
+| Casos sin ejecutar | **0/8** planificados |
+
+La campaña comprueba el registro de los argumentos explícitos en un
+lanzamiento completo. La puntuación se circunscribe a los ocho ejemplos
+sintéticos del corpus y el intervalo medido describe ese lanzamiento.
+La evidencia local incluye la preparación, los registros, el resumen
+operativo, las mediciones del inhibidor, los juicios, la constancia de
+aprobación y la salida original de `score`.
