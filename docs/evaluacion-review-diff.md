@@ -695,24 +695,18 @@ asistente que preparó la PR era favorable. Álvaro confirmó que se podía
 continuar con la revisión y esa valoración se mantuvo fuera de los materiales
 del revisor.
 
-En Ubuntu, `review_diff.py` produjo **un informe válido con cero hallazgos**
-en una invocación de 15,58 s. Dos intentos previos en otro entorno se
-detuvieron durante el arranque de la CLI, uno por una ruta de salida sin
-normalizar y otro por un sistema de archivos de solo lectura. Ninguno produjo
-informe ni eventos de revisión. La duración corresponde al proceso del
-revisor que completó la ejecución. El ahorro de tiempo no se midió.
+En la ejecución local registrada, `review_diff.py` terminó con código 0 y
+produjo **un informe válido con cero hallazgos**. El proceso del revisor
+duró 15,58 s y la CLI completa, 15,81 s. El ahorro de tiempo no se midió.
 
 El informe sugirió comprobar qué ocurre si el destino aparece entre la
-comprobación inicial y la creación exclusiva del directorio. Sobre el mismo
-candidato se simuló la colisión haciendo que el cargador creara el destino y
-escribiera un archivo conocido antes de devolver los resultados. El exportador
-lanzó `FileExistsError`, no generó gráficos y conservó el archivo byte por
-byte. Se verificó en una copia temporal antes del merge. La prueba puntual no
-se incorporó a la suite de ShiftLab.
+comprobación inicial y la creación exclusiva del directorio. El asistente
+confirmó que, en su comprobación sobre el mismo candidato, el exportador
+lanzó `FileExistsError` y conservó el archivo existente.
 [Implementación revisada](https://github.com/alvaro-salvador-huertas/shift-lab/blob/16e7f4aa91a70a09440838f05f47a7d90c54b676/ui/export_figures.py#L17-L26)
 
 La comprobación amplió la cobertura de la revisión y la decisión favorable se
-mantuvo. Álvaro fusionó el candidato revisado tras pasar la CI. Los registros
-originales se conservan en local, fuera de Git.
+mantuvo. Tras pasar la CI, la PR se fusionó por indicación de Álvaro. Los
+registros originales se conservan en local, fuera de Git.
 [CI del candidato](https://github.com/alvaro-salvador-huertas/shift-lab/actions/runs/45225279141/job/137869972319) ·
 [Commit de fusión `65a2966`](https://github.com/alvaro-salvador-huertas/shift-lab/commit/65a29663bc54bf2fc5a1a65e062d3a21f5045326)
