@@ -682,3 +682,31 @@ Las cifras describen esos recortes y el ahorro de tiempo queda **«no medido»**
 Se enviaron los argumentos de la selección `gpt-6.1-sol`, `openai`, `high`.
 Modelo, proveedor y esfuerzo efectivos figuran como **«no consta»**.
 Los informes y registros de adjudicación se conservan en local, fuera de Git.
+
+## Revisión antes del merge de ShiftLab #3
+
+El 24 de noviembre de 2026 se revisó la
+[PR #3 de ShiftLab](https://github.com/alvaro-salvador-huertas/shift-lab/pull/3)
+mientras estaba en borrador. El cambio evita crear carpetas de exportación
+cuando el cargador rechaza el JSON. Se revisaron `ui/export_figures.py` y
+`tests/test_export_figures.py`, de la base `5d3ad83ef20c7ad009cb2044b71dbd6c52fd3ddc`
+al candidato `16e7f4aa91a70a09440838f05f47a7d90c54b676`. La valoración previa del
+asistente que preparó la PR era favorable. Álvaro confirmó que se podía
+continuar con la revisión y esa valoración se mantuvo fuera de los materiales
+del revisor.
+
+En la ejecución local registrada, `review_diff.py` terminó con código 0 y
+produjo **un informe válido con cero hallazgos**. El proceso del revisor
+duró 15,58 s y la CLI completa, 15,81 s. El ahorro de tiempo no se midió.
+
+El informe sugirió comprobar qué ocurre si el destino aparece entre la
+comprobación inicial y la creación exclusiva del directorio. El asistente
+confirmó que, en su comprobación sobre el mismo candidato, el exportador
+lanzó `FileExistsError` y conservó el archivo existente.
+[Implementación revisada](https://github.com/alvaro-salvador-huertas/shift-lab/blob/16e7f4aa91a70a09440838f05f47a7d90c54b676/ui/export_figures.py#L17-L26)
+
+La comprobación amplió la cobertura de la revisión y la decisión favorable se
+mantuvo. Tras pasar la CI, la PR se fusionó por indicación de Álvaro. Los
+registros originales se conservan en local, fuera de Git.
+[CI del candidato](https://github.com/alvaro-salvador-huertas/shift-lab/actions/runs/45225279141/job/137869972319) ·
+[Commit de fusión `65a2966`](https://github.com/alvaro-salvador-huertas/shift-lab/commit/65a29663bc54bf2fc5a1a65e062d3a21f5045326)
