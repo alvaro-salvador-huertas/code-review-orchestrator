@@ -3,6 +3,7 @@
 import argparse
 import difflib
 import json
+from os.path import realpath
 from pathlib import Path
 import re
 import subprocess
@@ -194,6 +195,8 @@ def validate_response(raw, materials):
 def run_review(materials, output, *, model=None, provider=None, reasoning_effort=None):
     selected = reviewer_config.selection(model=model, provider=provider, reasoning_effort=reasoning_effort)
     validate_codex_provider(provider)
+    # Resolver solo el padre para que mkdir rechace también un enlace final roto.
+    output = Path(realpath(output.parent, strict=True)) / output.name
     output.mkdir(mode=0o700)  # Exclusivo, sin crear ni sustituir el directorio padre.
     log = output / "revisor"
     log.mkdir(mode=0o700)
@@ -285,7 +288,7 @@ def main(argv=None):
                 preview["seleccion_revisor"] = reviewer_config.frozen_document(selected)
             sys.stdout.buffer.write(json_bytes(preview))
             return 0
-        result = run_review(materials, args.output.absolute(), **reviewer_config.invocation_options(selected))
+        result = run_review(materials, args.output, **reviewer_config.invocation_options(selected))
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         print(f"review_diff: {exc}", file=sys.stderr)
         return 2

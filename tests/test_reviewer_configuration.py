@@ -184,6 +184,45 @@ class ReviewerConfigurationTests(unittest.TestCase):
         self.assertEqual(result["configuracion_revisor"]["argumentos_cli"], [])
         self.assertEqual(result["configuracion_revisor"]["solicitada"]["modelo"], "no fijado por el lanzador")
 
+    def test_review_cli_normalizes_output_parent_before_passing_last_message(self):
+        parent = self.root / "parent"
+        nested = parent / "nested"
+        nested.mkdir(parents=True)
+        (self.root / "alias").symlink_to(nested, target_is_directory=True)
+
+        subprocess.run(self.review_command(Path("alias/../review")), cwd=self.root,
+                       check=True, capture_output=True, timeout=15)
+
+        command = self.calls_read()[-1]
+        expected = parent.resolve() / "review"
+        self.assertEqual(command[command.index("--output-last-message") + 1],
+                         str(expected / "revisor/respuesta_original.json"))
+        self.assertTrue((expected / "resultado.json").is_file())
+        self.assertFalse((self.root / "review").exists())
+
+    def test_review_cli_preserves_existing_output_and_dangling_symlink(self):
+        (self.root / "nested").mkdir()
+        existing = self.root / "existing"
+        existing.mkdir()
+        original = existing / "resultado.json"
+        original.write_bytes(b"registro conservado\n")
+        dangling = self.root / "dangling"
+        missing = self.root / "missing"
+        dangling.symlink_to(missing)
+
+        for destination in (existing, dangling):
+            with self.subTest(destination=destination.name):
+                output = Path("nested") / ".." / destination.name
+                result = subprocess.run(self.review_command(output), cwd=self.root,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 2, result.stderr)
+
+        self.assertEqual(set(existing.iterdir()), {original})
+        self.assertEqual(original.read_bytes(), b"registro conservado\n")
+        self.assertEqual(dangling.readlink(), missing)
+        self.assertFalse(missing.exists())
+        self.assertEqual(self.calls_read(), [])
+
     def test_invalid_api_selections_fail_before_outputs_preflights_or_reservations(self):
         invalid = ({"model": ""}, {"model": "--flag"}, {"model": "\ud800"},
                    {"reasoning_effort": []}, {"reasoning_effort": "High"},
