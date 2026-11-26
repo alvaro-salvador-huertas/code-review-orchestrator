@@ -57,7 +57,7 @@ Desde la raíz del orquestador, este ejemplo prepara la revisión de la PR #42.
 ```bash
 python3 -B review_diff.py --repo . \
   --pr-url https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/42 \
-  --file review_diff.py --criterion 'Preservar la ruta del registro.'
+  --file review_diff.py --criterion 'Preservar la ruta del registro.' > vista-pr.json
 ```
 
 Con `gh` configurado para leer la PR, `pull_request` muestra el SHA de la rama base,
@@ -67,6 +67,28 @@ la selección. Se aplican los límites del piloto Python. Esta opción solo gene
 vista previa y requiere un historial completo. Si la copia es superficial, ejecuta
 manualmente `git fetch --unshallow` en ella y repite la consulta. Si faltan objetos
 locales, el diagnóstico indica el comando para traerlos.
+
+`comando_vista_previa` contiene una lista de argumentos ejecutable desde cualquier
+directorio de la misma máquina. Usa rutas absolutas, fija el ancestro común como
+`--base` y el HEAD consultado como `--candidate`. Conserva los archivos, criterios
+y opciones explícitas del revisor. Para repetir la vista previa sin consultar GitHub,
+pasa la lista directamente a `subprocess.run`. Así se conservan las comillas y los
+espacios de cada criterio.
+
+```bash
+python3 - <<'PY'
+import json
+import subprocess
+
+with open("vista-pr.json", encoding="utf-8") as entrada:
+    comando = json.load(entrada)["comando_vista_previa"]
+subprocess.run(comando, check=True)
+PY
+```
+
+Tras revisar los materiales, si autorizas enviarlos al modelo, sustituye la última
+línea de Python por `subprocess.run([*comando, "--invoke-model", "--output", "revision-42"], check=True)`.
+El directorio de salida debe ser nuevo. Esta invocación usa el modo con SHA explícitos.
 
 ## Selección explícita y trazabilidad del revisor
 

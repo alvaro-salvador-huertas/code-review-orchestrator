@@ -85,6 +85,37 @@ class ReviewDiffTests(unittest.TestCase):
             "url": "https://github.com/example/project/pull/7", "base_rama": self.base,
             "ancestro_comun": self.base, "candidato": self.head,
         })
+        for flag in ("--model", "--provider", "--reasoning-effort"):
+            self.assertNotIn(flag, preview["comando_vista_previa"])
+
+    def test_pr_preview_command_replays_pinned_materials_without_gh(self):
+        (self.repo / "other.py").write_text("candidate_only = True\n")
+        candidate = self.commit()
+        self.git("checkout", "-qb", "advanced", self.base)
+        self.file.write_text("base_only = 99\n")
+        advanced = self.commit()
+        quoted = """Conservar "sin datos" y 'vacío'."""
+        options = ["--model", "modelo-ejemplo", "--provider", "openai", "--reasoning-effort", "high"]
+        result = self.pr_preview(advanced, candidate, "--file", "other.py", "--criterion", quoted,
+                                 "--criterion=--help", *options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        preview = json.loads(result.stdout)
+        command = preview["comando_vista_previa"]
+        self.assertEqual(command[3:], [
+            "--repo", str(self.repo.resolve()), "--base", self.base, "--candidate", candidate,
+            "--file", "app.py", "--file", "other.py", "--criterion", self.criteria[0],
+            "--criterion", quoted, "--criterion=--help", *options,
+        ])
+        gh_log = self.root / "gh.called"
+        (self.root / "gh").write_text('#!/bin/sh\ntouch "$0.called"\nexit 1\n')
+        replay = subprocess.run(command, cwd=self.root, capture_output=True, timeout=15,
+                                env={**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]})
+        self.assertFalse(gh_log.exists())
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        repeated = json.loads(replay.stdout)
+        for key in ("estado", "materiales", "instrucciones", "esquema", "seleccion_revisor"):
+            self.assertEqual(repeated[key], preview[key])
+        self.assertNotIn("comando_vista_previa", repeated)
 
     def test_pr_preview_excludes_changes_only_in_advanced_base(self):
         self.git("checkout", "-qb", "advanced", self.base)
