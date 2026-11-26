@@ -306,6 +306,22 @@ def run_review(materials, output, *, model=None, provider=None, reasoning_effort
     return result
 
 
+def preview_command(repo, pr, args, reviewer_options):
+    command = [sys.executable, "-B", str(Path(__file__).resolve()),
+               "--repo", str(repo), "--base", pr["ancestro_comun"], "--candidate", pr["candidato"]]
+    for path in args.file:
+        command.extend(["--file", path])
+    for criterion in args.criterion:
+        if criterion.startswith("-"):
+            # argparse necesita la forma con '=' para valores como '--help'.
+            command.append("--criterion=" + criterion)
+        else:
+            command.extend(["--criterion", criterion])
+    for key, value in reviewer_options.items():
+        command.extend(["--" + key.replace("_", "-"), value])
+    return command
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
@@ -347,9 +363,11 @@ def main(argv=None):
                 "estado": "vista_previa_sin_modelo", "materiales": materials,
                 "instrucciones": review_prompt(materials), "esquema": response_schema(materials),
             }
+            reviewer_options = reviewer_config.invocation_options(selected)
             if args.pr_url is not None:
                 preview["pull_request"] = pr
-            if reviewer_config.invocation_options(selected):
+                preview["comando_vista_previa"] = preview_command(repo, pr, args, reviewer_options)
+            if reviewer_options:
                 preview["seleccion_revisor"] = reviewer_config.frozen_document(selected)
             sys.stdout.buffer.write(json_bytes(preview))
             return 0
