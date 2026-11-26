@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -55,6 +56,104 @@ class ReviewDiffTests(unittest.TestCase):
         self.assertEqual(self.file.read_text(), "LOCAL_ONLY = True\n")
         self.assertEqual((self.repo / ".git" / "index").read_bytes(), index)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.head)
+
+    def pr_preview(self, base, head, *extra):
+        gh = self.root / "gh"
+        gh.write_text(
+            "#!/bin/sh\n"
+            'test "$*" = "api --hostname github.com --method GET repos/example/project/pulls/7 '
+            '--jq .base.sha, .head.sha" || exit 1\n'
+            f"echo {base}\necho {head}\n"
+        )
+        gh.chmod(0o700)
+        cli = Path(__file__).resolve().parents[1] / "review_diff.py"
+        return subprocess.run(
+            [sys.executable, "-B", str(cli), "--repo", str(self.repo),
+             "--pr-url", "https://github.com/example/project/pull/7",
+             "--file", "app.py", "--criterion", self.criteria[0], *extra],
+            env={**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]},
+            capture_output=True, timeout=15,
+        )
+
+    def test_pr_preview_reuses_selected_materials(self):
+        result = self.pr_preview(self.base, self.head)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        preview = json.loads(result.stdout)
+        self.assertEqual(preview["estado"], "vista_previa_sin_modelo")
+        self.assertEqual(preview["materiales"], self.prepare())
+        self.assertEqual(preview["pull_request"], {
+            "url": "https://github.com/example/project/pull/7", "base_rama": self.base,
+            "ancestro_comun": self.base, "candidato": self.head,
+        })
+
+    def test_pr_preview_excludes_changes_only_in_advanced_base(self):
+        self.git("checkout", "-qb", "advanced", self.base)
+        self.file.write_text("value = 99\n")
+        (self.repo / "other.py").write_text("base_only = 3\n")
+        advanced = self.commit()
+        result = self.pr_preview(advanced, self.head)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        preview = json.loads(result.stdout)
+        self.assertEqual(preview["materiales"], self.prepare())
+        self.assertEqual(preview["pull_request"]["base_rama"], advanced)
+        self.assertEqual(preview["pull_request"]["ancestro_comun"], self.base)
+        rejected = self.pr_preview(advanced, self.head, "--file", "other.py")
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn(b"Fuera del diff de la PR: other.py", rejected.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), advanced)
+
+    def test_pr_preview_rejects_shallow_clone_with_misleading_merge_base(self):
+        # La rama candidata incorpora el cambio de app.py por un camino largo.
+        # Al truncarlo solo queda visible el camino corto a una base más antigua.
+        self.git("checkout", "-qb", "topic", self.base)
+        self.git("commit", "--allow-empty", "-qm", "Inicio de topic")
+        self.git("checkout", "-qb", "long-side", self.head)
+        for i in range(6):
+            self.git("commit", "--allow-empty", "-qm", f"Paso {i}")
+        self.git("checkout", "-q", "topic")
+        self.git("merge", "-qm", "Incorporar long-side", "long-side")
+        candidate = self.git("rev-parse", "HEAD").strip()
+        self.assertEqual(self.git("merge-base", self.head, candidate).strip(), self.head)
+        self.assertEqual(self.git("diff", self.head, candidate, "--", "app.py"), "")
+
+        shallow = self.root / "shallow"
+        self.git("clone", "-q", "--depth", "4", "--no-single-branch", self.repo.as_uri(), str(shallow))
+        self.repo = shallow
+        ancestor = self.git("merge-base", self.head, candidate).strip()
+        self.assertEqual(ancestor, self.base)
+        self.assertEqual(self.git("diff", "--name-only", ancestor, candidate), "app.py\n")
+        result = self.pr_preview(self.head, candidate)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"superficial", result.stderr)
+        self.assertIn(b"fetch --unshallow", result.stderr)
+        self.assertEqual(self.git("rev-parse", "--is-shallow-repository").strip(), "true")
+        self.assertFalse((shallow / ".git" / "FETCH_HEAD").exists())
+
+    def test_pr_preview_reports_unrelated_commits_without_fetch(self):
+        tree = self.git("rev-parse", "HEAD^{tree}").strip()
+        unrelated = self.git("commit-tree", tree, "-m", "Raíz independiente").strip()
+        result = self.pr_preview(self.head, unrelated)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn("no tienen ancestro común", result.stderr.decode())
+        self.assertNotIn(b"fetch", result.stderr)
+
+    def test_pr_preview_missing_candidate_reports_manual_fetch(self):
+        missing = "a" * 40
+        result = self.pr_preview(self.base, missing)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(missing.encode(), result.stderr)
+        self.assertIn(b"fetch https://github.com/example/project.git", result.stderr)
+        self.assertIn(b"refs/pull/7/head", result.stderr)
+        self.assertFalse((self.repo / ".git" / "FETCH_HEAD").exists())
+
+    def test_pr_preview_rejects_model_invocation(self):
+        output = self.root / "run"
+        result = self.pr_preview(self.base, self.head, "--invoke-model", "--output", str(output))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"--pr-url solo genera la vista previa", result.stderr)
+        self.assertFalse(output.exists())
 
     def test_rejects_path_escape_unchanged_file_and_symlink(self):
         for path in ("../app.py", ":(glob)*.py", "other.py"):
