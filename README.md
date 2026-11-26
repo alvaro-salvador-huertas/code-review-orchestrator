@@ -17,13 +17,14 @@ El [cierre de la v1](docs/cierre-v1.md), las [notas de v1.0.0](docs/notas-v1.0.0
 y su [release](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/releases/tag/v1.0.0)
 conservan el historial. [v1.1.0](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/releases/tag/v1.1.0)
 añadió la preparación local de tareas desde planes archivados.
+Los cambios de `main` desde la última release se resumen en las [notas propuestas para v1.3.0](docs/notas-v1.3.0.md).
 
 Elige un primer recorrido desde la raíz de un clon:
 
 | Objetivo | Recorrido | Requisitos |
 | --- | --- | --- |
 | Explorar un resultado sin modelo ni ejecutar candidatos. | [Demo del inspector](#demo-sin-modelo). | Python 3 y biblioteca estándar. |
-| Preparar la revisión de un diff local con un ejemplo existente. | [Vista previa de revisión](#revisar-un-diff-local-sin-modelo). | Python 3, Git y los commits locales del ejemplo. |
+| Revisar un cambio Python desde una PR de GitHub. | [Vista previa de la PR #42](#revisar-una-pr-de-github). | Python 3, Git, clon completo y `gh` con acceso de lectura. |
 | Comprobar la frontera que ejecuta pruebas de proyectos. | [Preparar Podman y ejecutar la sonda](#preparar-el-evaluador-aislado). | Linux, Podman rootless y cgroups v2 con delegación. |
 
 ## Demo sin modelo
@@ -50,32 +51,22 @@ recuentos. Permiten explorar el inspector; no acreditan ejecuciones de agentes
 ni pruebas reales. La [guía de la demo](examples/inspect_run/README.md) explica
 los canales y la diferencia entre el código de consulta y el de ejecución.
 
-## Revisar un diff local sin modelo
+<a id="revisar-un-diff-local-sin-modelo"></a>
 
-Este ejemplo compara los commits anteriores y posteriores al refactor de lectura
-de `booking_batch.py` de la [PR #25](https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/25).
-Necesita esos objetos en el clon; una copia superficial puede no contenerlos.
+## Revisar una PR de GitHub
+
+Desde un clon completo de `main`, guarda la vista previa de la PR #42. Elige el
+archivo Python y el criterio que quieres comprobar.
 
 ```bash
-python3 -B review_diff.py --repo . \
-  --base 8e6415f117d1056f560801574297890d5ead9e17 \
-  --candidate 9318c5b02c20daa7362194f40a2e4c2ee36ce38d \
-  --file booking_batch.py \
-  --criterion 'Conservar el comportamiento de la CLI y sus diagnósticos.' \
-  --criterion 'Conservar la lectura UTF-8 estricta y el rechazo de JSON no válido.' \
-  --criterion 'No escribir resultados parciales si una consulta posterior falla.'
+python3 -B review_diff.py --pr-url https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/42 \
+  --repo . --file review_diff.py --criterion 'Preservar la ruta del registro.' > vista-pr.json
 ```
 
-Devuelve código **0** y JSON con `estado: vista_previa_sin_modelo`: los textos,
-hashes, diff y criterios que se entregarían al revisor. Lee objetos Git locales;
-no incorpora cambios sin commit, ejecuta pruebas ni produce un dictamen de modelo.
-La [guía de revisión](docs/revision-diff.md) incluye también el modo `--snapshot`
-para fuentes C++ de un solo commit, sin compilarlas ni ejecutarlas.
-
-Para solicitar el dictamen hay que añadir explícitamente `--invoke-model` y
-`--output` con un directorio nuevo. Esa operación requiere Codex CLI autenticado
-y envía los archivos completos seleccionados; usa una sesión nueva de solo lectura,
-una invocación y hasta 180 s. El dictamen sigue sujeto a revisión humana.
+Inspecciona los textos completos y el diff en `vista-pr.json`. La
+[guía de revisión](docs/revision-diff.md#vista-previa-de-una-pull-request-de-github)
+explica cómo repetir la vista con los SHA fijados y, si autorizas el envío de
+esos materiales, guardar el informe en un directorio nuevo.
 
 ## Preparar el evaluador aislado
 
