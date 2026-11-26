@@ -50,6 +50,22 @@ Un código 0 en este modo significa informe disponible, incluso si contiene
 hallazgos; no equivale a aprobación. Un 1 indica fallo de revisión, un 2 indica
 entrada u operación inválida y un 130 indica interrupción del revisor.
 
+## Vista previa de una pull request de GitHub
+
+Desde la raíz del orquestador, este ejemplo prepara la revisión de la PR #42.
+
+```bash
+python3 -B review_diff.py --repo . \
+  --pr-url https://github.com/alvaro-salvador-huertas/code-review-orchestrator/pull/42 \
+  --file review_diff.py --criterion 'Preservar la ruta del registro.'
+```
+
+Con `gh` configurado para leer la PR, `pull_request` muestra el SHA de la rama base,
+el del candidato y su ancestro común. El diff compara ese ancestro con el candidato,
+incluso si la rama base ha avanzado. Repite `--file` y `--criterion` para ampliar
+la selección. Se aplican los límites del piloto Python. Esta opción solo genera la
+vista previa. Si faltan objetos locales, el diagnóstico indica el comando de descarga manual.
+
 ## Selección explícita y trazabilidad del revisor
 
 `--model`, `--provider` y `--reasoning-effort` son opcionales tanto en la vista

@@ -1,11 +1,13 @@
 """Revisión de solo lectura de cambios Python o de una versión C++."""
 
 import argparse
+from contextlib import contextmanager
 import difflib
 import json
 from os.path import realpath
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -56,13 +58,26 @@ def json_bytes(value):
     return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
+@contextmanager
+def local_git_environment():
+    with process_environment("evaluation") as environment:
+        # Prohibir transportes y consultas remotas de objetos en clones parciales.
+        environment.update(GIT_ALLOW_PROTOCOL="", GIT_NO_LAZY_FETCH="1", GIT_OPTIONAL_LOCKS="0")
+        yield environment
+
+
+class GitQueryError(ValueError):
+    pass
+
+
 def git(repo, environment, *args):
     process = subprocess.run(
         ["git", "--no-replace-objects", "-C", str(repo), *args],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         timeout=10, env=environment, check=False,
     )
-    require(process.returncode == 0, f"No se pudo consultar Git ({args[0]})")
+    if process.returncode != 0:
+        raise GitQueryError(f"No se pudo consultar Git ({' '.join(args)})")
     return process.stdout
 
 
@@ -95,9 +110,7 @@ def prepare(repo, base, candidate, files, criteria):
     validate_selection(files, criteria, SOURCE,
                        "Solo se admiten rutas relativas explícitas de archivos .py")
     selected = []
-    with process_environment("evaluation") as environment:
-        # Prohibir transportes y consultas remotas de objetos en clones parciales.
-        environment.update(GIT_ALLOW_PROTOCOL="", GIT_NO_LAZY_FETCH="1", GIT_OPTIONAL_LOCKS="0")
+    with local_git_environment() as environment:
         for commit in (base, candidate):
             require(git(repo, environment, "cat-file", "-t", commit) == b"commit\n",
                     "Se requieren commits, no etiquetas ni otros objetos")
@@ -117,13 +130,54 @@ def prepare(repo, base, candidate, files, criteria):
     return materials
 
 
+def prepare_pr(repo, url, files, criteria):
+    match = re.fullmatch(r"https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)/?", url)
+    require(match and match[2] not in (".", ".."), "Indica una URL de pull request de github.com")
+    validate_selection(files, criteria, SOURCE,
+                       "Solo se admiten rutas relativas explícitas de archivos .py")
+    owner, project, number = match.groups()
+    metadata = subprocess.run(
+        ["gh", "api", "--hostname", "github.com", "--method", "GET",
+         f"repos/{owner}/{project}/pulls/{number}", "--jq", ".base.sha, .head.sha"],
+        stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+    )
+    require(metadata.returncode == 0, f"gh no pudo consultar {url}. Comprueba la URL y el acceso de gh.")
+    commits = metadata.stdout.decode("ascii").splitlines()
+    require(len(commits) == 2 and all(OID.fullmatch(oid) for oid in commits),
+            "gh no devolvió los SHA completos de base y candidato")
+    branch_base, candidate = commits
+    with local_git_environment() as environment:
+        shallow = git(repo, environment, "rev-parse", "--is-shallow-repository").strip() == b"true"
+        fetch = ["git", "-C", str(repo), "fetch"]
+        if shallow:
+            fetch.append("--unshallow")
+        try:
+            for commit in commits:
+                require(git(repo, environment, "cat-file", "-t", commit) == b"commit\n",
+                        f"{commit} debe ser un commit")
+            # Si ya están ambas puntas, una descarga negociada puede omitir árboles o blobs pendientes.
+            fetch.append("--refetch")
+            ancestors = git(repo, environment, "merge-base", "--all", branch_base, candidate).decode().splitlines()
+            require(len(ancestors) == 1, "La PR tiene varios ancestros comunes óptimos")
+            ancestor = ancestors[0]
+            changed = git(repo, environment, "diff-tree", "-r", "--no-commit-id", "--no-renames",
+                          "--name-only", "-z", ancestor, candidate, "--", *files).split(b"\0")
+            outside = [path for path in files if path.encode() not in changed]
+            require(not outside, f"Fuera del diff de la PR: {', '.join(outside)}")
+            materials = prepare(repo, ancestor, candidate, files, criteria)
+        except GitQueryError as exc:
+            fetch.extend([f"https://github.com/{owner}/{project}.git", branch_base, f"refs/pull/{number}/head"])
+            raise ValueError(f"{exc}. Para traer los objetos e historial de la PR: {shlex.join(fetch)}") from exc
+    return materials, {"url": url, "base_rama": branch_base, "ancestro_comun": ancestor,
+                       "candidato": candidate}
+
+
 def prepare_snapshot(repo, snapshot, files, criteria):
     require(OID.fullmatch(snapshot), "Indica un SHA completo de un commit local")
     validate_selection(files, criteria, CXX_SOURCE,
                        "Solo se admiten rutas relativas explícitas de archivos .cpp, .h o .hpp")
     selected = []
-    with process_environment("evaluation") as environment:
-        environment.update(GIT_ALLOW_PROTOCOL="", GIT_NO_LAZY_FETCH="1", GIT_OPTIONAL_LOCKS="0")
+    with local_git_environment() as environment:
         require(git(repo, environment, "cat-file", "-t", snapshot) == b"commit\n",
                 "Se requiere un commit, no una etiqueta ni otro objeto")
         for path in files:
@@ -253,6 +307,7 @@ def main(argv=None):
     parser.add_argument("--repo", type=Path, required=True)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--base", help="SHA completo de la base del cambio Python")
+    mode.add_argument("--pr-url", help="URL de la PR de GitHub para la vista previa Python")
     mode.add_argument("--snapshot", help="SHA completo de la única versión C++")
     parser.add_argument("--candidate", help="SHA completo del candidato Python; requiere --base")
     parser.add_argument("--file", action="append", required=True)
@@ -268,6 +323,8 @@ def main(argv=None):
         parser.error("--base requiere --candidate")
     if args.snapshot is not None and args.candidate is not None:
         parser.error("--snapshot no admite --candidate")
+    if args.pr_url is not None and (args.candidate is not None or args.invoke_model or args.output is not None):
+        parser.error("--pr-url solo genera la vista previa y no admite --candidate, --invoke-model ni --output")
     if args.invoke_model != (args.output is not None):
         parser.error("--invoke-model y --output deben usarse juntos")
     try:
@@ -275,7 +332,9 @@ def main(argv=None):
                                               reasoning_effort=args.reasoning_effort)
         validate_codex_provider(args.provider)
         repo = args.repo.resolve(strict=True)
-        if args.snapshot is not None:
+        if args.pr_url is not None:
+            materials, pr = prepare_pr(repo, args.pr_url, args.file, args.criterion)
+        elif args.snapshot is not None:
             materials = prepare_snapshot(repo, args.snapshot, args.file, args.criterion)
         else:
             materials = prepare(repo, args.base, args.candidate, args.file, args.criterion)
@@ -284,6 +343,8 @@ def main(argv=None):
                 "estado": "vista_previa_sin_modelo", "materiales": materials,
                 "instrucciones": review_prompt(materials), "esquema": response_schema(materials),
             }
+            if args.pr_url is not None:
+                preview["pull_request"] = pr
             if reviewer_config.invocation_options(selected):
                 preview["seleccion_revisor"] = reviewer_config.frozen_document(selected)
             sys.stdout.buffer.write(json_bytes(preview))
