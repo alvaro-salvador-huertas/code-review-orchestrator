@@ -70,12 +70,14 @@ class GitQueryError(ValueError):
     pass
 
 
-def git(repo, environment, *args):
+def git(repo, environment, *args, empty_status=None):
     process = subprocess.run(
         ["git", "--no-replace-objects", "-C", str(repo), *args],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         timeout=10, env=environment, check=False,
     )
+    if process.returncode == empty_status and not process.stdout and not process.stderr:
+        return b""
     if process.returncode != 0:
         raise GitQueryError(f"No se pudo consultar Git ({' '.join(args)})")
     return process.stdout
@@ -136,28 +138,30 @@ def prepare_pr(repo, url, files, criteria):
     validate_selection(files, criteria, SOURCE,
                        "Solo se admiten rutas relativas explícitas de archivos .py")
     owner, project, number = match.groups()
-    metadata = subprocess.run(
-        ["gh", "api", "--hostname", "github.com", "--method", "GET",
-         f"repos/{owner}/{project}/pulls/{number}", "--jq", ".base.sha, .head.sha"],
-        stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
-    )
-    require(metadata.returncode == 0, f"gh no pudo consultar {url}. Comprueba la URL y el acceso de gh.")
-    commits = metadata.stdout.decode("ascii").splitlines()
-    require(len(commits) == 2 and all(OID.fullmatch(oid) for oid in commits),
-            "gh no devolvió los SHA completos de base y candidato")
-    branch_base, candidate = commits
     with local_git_environment() as environment:
-        shallow = git(repo, environment, "rev-parse", "--is-shallow-repository").strip() == b"true"
         fetch = ["git", "-C", str(repo), "fetch"]
-        if shallow:
-            fetch.append("--unshallow")
+        if git(repo, environment, "rev-parse", "--is-shallow-repository").strip() == b"true":
+            command = shlex.join([*fetch, "--unshallow"])
+            raise ValueError(f"La copia local es superficial. Completa el historial manualmente con: {command}")
+        metadata = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "--method", "GET",
+             f"repos/{owner}/{project}/pulls/{number}", "--jq", ".base.sha, .head.sha"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+        )
+        require(metadata.returncode == 0, f"gh no pudo consultar {url}. Comprueba la URL y el acceso de gh.")
+        commits = metadata.stdout.decode("ascii").splitlines()
+        require(len(commits) == 2 and all(OID.fullmatch(oid) for oid in commits),
+                "gh no devolvió los SHA completos de base y candidato")
+        branch_base, candidate = commits
         try:
             for commit in commits:
                 require(git(repo, environment, "cat-file", "-t", commit) == b"commit\n",
                         f"{commit} debe ser un commit")
             # Si ya están ambas puntas, una descarga negociada puede omitir árboles o blobs pendientes.
             fetch.append("--refetch")
-            ancestors = git(repo, environment, "merge-base", "--all", branch_base, candidate).decode().splitlines()
+            raw = git(repo, environment, "merge-base", "--all", branch_base, candidate, empty_status=1)
+            require(raw, f"Los commits {branch_base} y {candidate} no tienen ancestro común")
+            ancestors = raw.decode().splitlines()
             require(len(ancestors) == 1, "La PR tiene varios ancestros comunes óptimos")
             ancestor = ancestors[0]
             changed = git(repo, environment, "diff-tree", "-r", "--no-commit-id", "--no-renames",

@@ -88,6 +88,7 @@ class ReviewDiffTests(unittest.TestCase):
 
     def test_pr_preview_excludes_changes_only_in_advanced_base(self):
         self.git("checkout", "-qb", "advanced", self.base)
+        self.file.write_text("value = 99\n")
         (self.repo / "other.py").write_text("base_only = 3\n")
         advanced = self.commit()
         result = self.pr_preview(advanced, self.head)
@@ -100,6 +101,43 @@ class ReviewDiffTests(unittest.TestCase):
         self.assertEqual(rejected.returncode, 2)
         self.assertIn(b"Fuera del diff de la PR: other.py", rejected.stderr)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), advanced)
+
+    def test_pr_preview_rejects_shallow_clone_with_misleading_merge_base(self):
+        # La rama candidata incorpora el cambio de app.py por un camino largo.
+        # Al truncarlo solo queda visible el camino corto a una base más antigua.
+        self.git("checkout", "-qb", "topic", self.base)
+        self.git("commit", "--allow-empty", "-qm", "Inicio de topic")
+        self.git("checkout", "-qb", "long-side", self.head)
+        for i in range(6):
+            self.git("commit", "--allow-empty", "-qm", f"Paso {i}")
+        self.git("checkout", "-q", "topic")
+        self.git("merge", "-qm", "Incorporar long-side", "long-side")
+        candidate = self.git("rev-parse", "HEAD").strip()
+        self.assertEqual(self.git("merge-base", self.head, candidate).strip(), self.head)
+        self.assertEqual(self.git("diff", self.head, candidate, "--", "app.py"), "")
+
+        shallow = self.root / "shallow"
+        self.git("clone", "-q", "--depth", "4", "--no-single-branch", self.repo.as_uri(), str(shallow))
+        self.repo = shallow
+        ancestor = self.git("merge-base", self.head, candidate).strip()
+        self.assertEqual(ancestor, self.base)
+        self.assertEqual(self.git("diff", "--name-only", ancestor, candidate), "app.py\n")
+        result = self.pr_preview(self.head, candidate)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"superficial", result.stderr)
+        self.assertIn(b"fetch --unshallow", result.stderr)
+        self.assertEqual(self.git("rev-parse", "--is-shallow-repository").strip(), "true")
+        self.assertFalse((shallow / ".git" / "FETCH_HEAD").exists())
+
+    def test_pr_preview_reports_unrelated_commits_without_fetch(self):
+        tree = self.git("rev-parse", "HEAD^{tree}").strip()
+        unrelated = self.git("commit-tree", tree, "-m", "Raíz independiente").strip()
+        result = self.pr_preview(self.head, unrelated)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn("no tienen ancestro común", result.stderr.decode())
+        self.assertNotIn(b"fetch", result.stderr)
 
     def test_pr_preview_missing_candidate_reports_manual_fetch(self):
         missing = "a" * 40

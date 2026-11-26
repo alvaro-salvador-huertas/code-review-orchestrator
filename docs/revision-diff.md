@@ -64,7 +64,9 @@ Con `gh` configurado para leer la PR, `pull_request` muestra el SHA de la rama b
 el del candidato y su ancestro común. El diff compara ese ancestro con el candidato,
 incluso si la rama base ha avanzado. Repite `--file` y `--criterion` para ampliar
 la selección. Se aplican los límites del piloto Python. Esta opción solo genera la
-vista previa. Si faltan objetos locales, el diagnóstico indica el comando de descarga manual.
+vista previa y requiere un historial completo. Si la copia es superficial, ejecuta
+manualmente `git fetch --unshallow` en ella y repite la consulta. Si faltan objetos
+locales, el diagnóstico indica el comando para traerlos.
 
 ## Selección explícita y trazabilidad del revisor
 
